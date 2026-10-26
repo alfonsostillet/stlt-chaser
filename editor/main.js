@@ -53,6 +53,7 @@ function createWindow() {
     prefsFile: path.join(dataDir, 'prefs.json'),
     arenaOutputs: arenaOutputs(),
     documents: app.getPath('documents'),
+    version: app.getVersion(),
   }));
   ipcMain.handle('read-text', (_e, file) => (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : null));
   ipcMain.handle('write-text', (_e, file, text) => writeAtomic(file, text));

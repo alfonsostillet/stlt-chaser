@@ -62,6 +62,7 @@ async function boot() {
   }
 
   const store = createStore({ doc, library, prefs, paths });
+  if (paths.version) $('#menu .version').textContent = `v${paths.version}`;
   store.state.ui.message = message;
 
   // ---- Actions used by the panels ----
