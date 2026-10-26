@@ -2,6 +2,8 @@
 
 Chase e screen bump sulle slice dell'Advanced Output di Resolume Arena: un editor per disegnare le sequenze e tre effetti FFGL che le suonano (STLT-CHASER, STLT-WIPER, STLT-OUTLINER).
 
+![L'editor STLT-CHASER: uno stage LED dimostrativo con le slice del passo selezionato accese](images/editor.png)
+
 ## Installazione
 
 1. Scarica l'ultima versione dalla pagina *Releases* del progetto: `STLT-CHASER-…-Windows-Setup.exe` per Windows, `STLT-CHASER-…-macOS.dmg` per Mac.
@@ -10,6 +12,8 @@ Chase e screen bump sulle slice dell'Advanced Output di Resolume Arena: un edito
 4. Riapri Resolume: trovi gli effetti STLT-CHASER, STLT-WIPER e STLT-OUTLINER.
 
 ## Uso
+
+![La Factory: una sequenza a colonne generata dalla griglia sui centri delle slice](images/factory.png)
 
 1. Prepara l'Advanced Output in Arena (Save & Close).
 2. Apri l'editor STLT-CHASER. Al primo avvio carica da solo l'Advanced Output di Arena.

@@ -17,12 +17,21 @@ const RATES = [
 ];
 const HOLD_FOR_MULTI_MS = 500;
 
+// Drawn icons: the Unicode media symbols turn into colour emoji on some systems.
+const icon = (path) => `<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="${path}"/></svg>`;
+const ICONS = {
+  previous: icon('M3 3h2v10H3zM14 3v10L6 8z'),
+  next: icon('M11 3h2v10h-2zM2 3v10l8-5z'),
+  play: icon('M4 2.5v11L13.5 8z'),
+  stop: icon('M3.5 3.5h9v9h-9z'),
+};
+
 export function createSequencer(root, store) {
   root.innerHTML = `
     <div class="transport">
-      <button class="round small" data-act="prev-seq" title="Previous sequence (Up)">&#x23EE;&#xFE0E;</button>
-      <button class="round big" data-act="play" title="Play / stop (Enter)">&#x25B6;&#xFE0E;</button>
-      <button class="round small" data-act="next-seq" title="Next sequence (Down)">&#x23ED;&#xFE0E;</button>
+      <button class="round small" data-act="prev-seq" title="Previous sequence (Up)">${ICONS.previous}</button>
+      <button class="round big" data-act="play" title="Play / stop (Enter)">${ICONS.play}</button>
+      <button class="round small" data-act="next-seq" title="Next sequence (Down)">${ICONS.next}</button>
       <input class="seq-number" data-field="seq-number" title="Jump to sequence" />
       <div class="seq-name"><input data-field="seq-name" title="Sequence name" /></div>
     </div>
@@ -260,7 +269,7 @@ export function createSequencer(root, store) {
     setField('step-count', seq.steps.length);
     setField('bpm', store.state.prefs.bpm ?? 120);
     setField('rate', store.state.prefs.rate ?? 0);
-    $('[data-act="play"]').innerHTML = playing ? '&#x25A0;&#xFE0E;' : '&#x25B6;&#xFE0E;';
+    $('[data-act="play"]').innerHTML = playing ? ICONS.stop : ICONS.play;
 
     if (stepsEl.children.length !== seq.steps.length) {
       stepsEl.innerHTML = seq.steps.map((_, i) => `<button class="step" data-index="${i}">${i + 1}</button>`).join('');

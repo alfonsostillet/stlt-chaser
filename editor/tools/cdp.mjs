@@ -53,6 +53,8 @@ if (command === 'screenshot') {
     await send('Input.dispatchKeyEvent', { type: 'keyDown', key, code, modifiers });
     await send('Input.dispatchKeyEvent', { type: 'keyUp', key, code, modifiers });
   }
+} else if (command === 'front') {
+  await send('Page.bringToFront');
 } else if (command === 'reload') {
   await send('Page.reload');
   await new Promise((r) => setTimeout(r, 1500));

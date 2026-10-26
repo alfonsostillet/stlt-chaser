@@ -8,6 +8,8 @@ STLT-CHASER is a free, open-source toolkit made of:
 
 Whatever you change in the editor reaches Resolume within half a second, even while the effects are running.
 
+![The STLT-CHASER editor: a demo LED stage with the slices of the selected step lit, the sequence list on the left and the step sequencer at the bottom](docs/images/editor.png)
+
 > 🇮🇹 Guida completa in italiano: [docs/GUIDA.md](docs/GUIDA.md)
 
 STLT-CHASER is an independent project. It is not affiliated with or endorsed by Resolume or by the makers of any other product.
@@ -49,6 +51,9 @@ Effects in Resolume work in a chain. To combine STLT-CHASER and STLT-WIPER on th
 - **Sequencer**: 1 to 1024 steps per sequence, unlimited sequences. Drag a step onto another to copy it; drag and hold to copy it to every n-th step. Repeat, ping-pong and clear buttons, preview playback with BPM.
 - **Views**: named groups of slices, used by the effects to limit which slices they touch.
 - **Factory**: generates sequences from a grid laid over the slice centres (horizontal, vertical, row, column, random; flip, block, modulo, mirror, shuffle). Drag the grid lines to adjust it.
+
+  ![The Factory panel: a column sweep generated from the grid drawn over the slice centres](docs/images/factory.png)
+
 - **Envelopes**: draw opacity curves with Bézier handles, shared by all projects.
 - **Export**: input and output maps as PNG test patterns, with names, positions and sizes.
 

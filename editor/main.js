@@ -8,7 +8,8 @@ const pluginSource = () =>
 
 // Everything the editor and the plugins share lives here. AppData is outside the folders
 // Windows' Controlled Folder Access protects, so the editor can always save.
-const dataDir = path.join(app.getPath('appData'), 'Stilletchaser');
+// STLT_DATA_DIR points the editor at another folder, e.g. a demo stage for screenshots.
+const dataDir = process.env.STLT_DATA_DIR || path.join(app.getPath('appData'), 'Stilletchaser');
 
 function arenaOutputs() {
   const documents = app.getPath('documents');
