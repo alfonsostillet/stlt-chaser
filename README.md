@@ -72,7 +72,7 @@ cmake --install plugin/build --prefix plugin/dist --config Release
 
 On macOS this builds universal (arm64 + x86_64) `.bundle` files.
 
-**Editor** (Node.js 20+):
+**Editor** (Node.js 22+):
 
 ```
 cd editor
