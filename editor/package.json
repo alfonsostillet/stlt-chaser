@@ -32,6 +32,7 @@
       "styles.css",
       "src/**/*",
       "dev/mock-host.js",
+      "build/icon.png",
       "package.json"
     ],
     "extraResources": [
