@@ -1,0 +1,12 @@
+# Dependencies and build output
+node_modules/
+editor/release/
+plugin/build/
+plugin/dist/
+
+# Local tools and settings
+.claude/
+*.user
+.vs/
+.DS_Store
+Thumbs.db
