@@ -6,7 +6,7 @@ if(APPLE AND NOT CMAKE_OSX_ARCHITECTURES)
     set(CMAKE_OSX_ARCHITECTURES "arm64;x86_64" CACHE STRING "Build universal plugins")
 endif()
 
-project(STLT-CHASER VERSION 1.0.1 LANGUAGES CXX)
+project(STLT-CHASER VERSION 1.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -29,6 +29,8 @@ add_library(stilletchaser-common STATIC
     src/ChaseDocument.h
     src/FrameHistory.cpp
     src/FrameHistory.h
+    src/Outline.cpp
+    src/Outline.h
 )
 set_target_properties(stilletchaser-common PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(stilletchaser-common PUBLIC

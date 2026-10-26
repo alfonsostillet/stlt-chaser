@@ -23,34 +23,60 @@ enum ParamID
 	PID_ODD_EVEN,
 	PID_SWAP,
 	PID_ENVELOPE,
+	PID_SOURCE,
+	PID_RED,
+	PID_GREEN,
+	PID_BLUE,
+	PID_SHOW_ORIGINAL,
 	PID_COUNT
 };
 
-const int MAX_LOOPS = 16;
+enum Source
+{
+	SOURCE_VIDEO,
+	SOURCE_COLOUR,
+};
 
-const char fragmentShaderCode[] = R"(#version 410 core
+const int MAX_LOOPS = MAX_WIPE_LOOPS;
+
+// Wipes show the incoming video, or a solid colour.
+const char fragmentShaderBody[] = R"(
 uniform sampler2D inputTexture;
 uniform vec2 maxUV;
-uniform float head;     // Leading edge position along the wipe, 0..1+length.
-uniform float len;      // Length of the gradient band, 0..1 of the slice.
-uniform int alongY;     // Wipe along the slice's y edge instead of its x edge.
-uniform int reversed;   // Run from the far edge back.
-uniform int useCurve;
-uniform float curve[ 256 ];
+uniform int useColour;
+uniform vec3 colour;
 in vec2 uv;
 in vec2 local;
 out vec4 fragColor;
 void main()
 {
-	float d = alongY != 0 ? local.y : local.x;
-	if( reversed != 0 )
-		d = 1.0 - d;
-	// 0 at the leading edge, 1 at the tail of the band.
-	float x = ( head - d ) / len;
-	if( x < 0.0 || x > 1.0 )
+	float a = wipeAlpha( local );
+	if( a <= 0.0 )
 		discard;
-	float a = useCurve != 0 ? curve[ int( x * 255.0 ) ] : 1.0 - x;
-	fragColor = texture( inputTexture, uv * maxUV ) * a;
+	vec4 source = useColour != 0 ? vec4( colour, 1.0 ) : texture( inputTexture, uv * maxUV );
+	fragColor   = source * a;
+}
+)";
+
+const char copyVertexShader[] = R"(#version 410 core
+layout( location = 0 ) in vec4 vPosition;
+layout( location = 1 ) in vec2 vUV;
+out vec2 uv;
+void main()
+{
+	gl_Position = vPosition;
+	uv          = vUV;
+}
+)";
+
+const char copyFragmentShader[] = R"(#version 410 core
+uniform sampler2D inputTexture;
+uniform vec2 maxUV;
+in vec2 uv;
+out vec4 fragColor;
+void main()
+{
+	fragColor = texture( inputTexture, uv * maxUV );
 }
 )";
 
@@ -91,8 +117,16 @@ public:
 		SetParamInfo( PID_SWAP, "Swap Directions", FF_TYPE_BOOLEAN, false );
 		SetOptionParamInfo( PID_ENVELOPE, "Envelope", 1, 0.f );
 		SetParamElementInfo( PID_ENVELOPE, 0, "Gradient", 0.f );
+		SetOptionParamInfo( PID_SOURCE, "Source", 2, (float)SOURCE_VIDEO );
+		SetParamElementInfo( PID_SOURCE, SOURCE_VIDEO, "Video", (float)SOURCE_VIDEO );
+		SetParamElementInfo( PID_SOURCE, SOURCE_COLOUR, "Solid Color", (float)SOURCE_COLOUR );
+		SetParamInfo( PID_RED, "Red", FF_TYPE_RED, 1.f );
+		SetParamInfo( PID_GREEN, "Green", FF_TYPE_GREEN, 1.f );
+		SetParamInfo( PID_BLUE, "Blue", FF_TYPE_BLUE, 1.f );
+		SetParamInfo( PID_SHOW_ORIGINAL, "Show Original", FF_TYPE_BOOLEAN, false );
 		for( int i = 0; i < PID_COUNT; ++i )
 			values[ i ] = GetDefault( i );
+		UpdateVisibility( false );
 
 		doc        = DocumentWatcher::Instance().Current();
 		docVersion = DocumentWatcher::Instance().Version();
@@ -101,8 +135,10 @@ public:
 
 	FFResult InitGL( const FFGLViewportStruct* vp ) override
 	{
-		std::string vertex = std::string( CompositionVertexHeader() ) + vertexShaderBody;
-		if( !shader.Compile( vertex, fragmentShaderCode ) || !mesh.Init( { 2, 2, 2 } ) )
+		std::string vertex   = std::string( CompositionVertexHeader() ) + vertexShaderBody;
+		std::string fragment = std::string( "#version 410 core\n" ) + WipeAlphaGLSL() + fragmentShaderBody;
+		if( !shader.Compile( vertex, fragment ) || !copyShader.Compile( copyVertexShader, copyFragmentShader ) || !quad.Initialise() ||
+			!mesh.Init( { 2, 2, 2 } ) )
 		{
 			DeInitGL();
 			return FF_FAIL;
@@ -113,6 +149,8 @@ public:
 	FFResult DeInitGL() override
 	{
 		shader.FreeGLResources();
+		copyShader.FreeGLResources();
+		quad.Release();
 		mesh.Release();
 		return FF_SUCCESS;
 	}
@@ -122,6 +160,8 @@ public:
 		if( index >= PID_COUNT )
 			return FF_FAIL;
 		values[ index ] = value;
+		if( index == PID_SOURCE )
+			UpdateVisibility( true );
 		return FF_SUCCESS;
 	}
 
@@ -151,6 +191,17 @@ public:
 
 		glClearColor( 0.f, 0.f, 0.f, 0.f );
 		glClear( GL_COLOR_BUFFER_BIT );
+		const FFGLTexCoords inputMax = GetMaxGLTexCoords( input );
+		if( values[ PID_SHOW_ORIGINAL ] > 0.5f )
+		{
+			// Keep what comes in (e.g. a chase above in the chain) and draw the wipes over it.
+			ScopedShaderBinding copyBinding( copyShader.GetGLID() );
+			ScopedSamplerActivation activateSampler( 0 );
+			Scoped2DTextureBinding textureBinding( input.Handle );
+			copyShader.Set( "inputTexture", 0 );
+			copyShader.Set( "maxUV", inputMax.s, inputMax.t );
+			quad.Draw();
+		}
 		if( doc->slices.empty() || doc->sequences.empty() )
 			return FF_SUCCESS;
 
@@ -158,51 +209,45 @@ public:
 		mesh.Upload( vertices );
 
 		const Sequence& seq = doc->sequences[ Option( values[ PID_SEQUENCE ], (int)doc->sequences.size() ) ];
-		const int count     = (int)seq.steps.size();
-		const int loops     = std::clamp( (int)std::lround( values[ PID_LOOPS ] ), 1, MAX_LOOPS );
-		const int total     = count * loops;
 		const float length  = std::clamp( values[ PID_LENGTH ], 0.01f, 1.f );
-		// With overlap a wipe lasts longer than one step, so the next one starts before it ends.
-		const float duration = 1.f / ( 1.f - std::clamp( values[ PID_OVERLAP ], 0.f, 0.95f ) );
-		const float position = std::min( values[ PID_STEP ], 0.99999f ) * (float)total;
-		const Envelope* env  = ChosenEnvelope( *doc, values[ PID_ENVELOPE ] );
+		const Envelope* env = ChosenEnvelope( *doc, values[ PID_ENVELOPE ] );
+		const auto wipes    = ActiveWipes( (int)seq.steps.size(), values[ PID_STEP ], (int)std::lround( values[ PID_LOOPS ] ), length,
+										   values[ PID_OVERLAP ], values[ PID_ODD_EVEN ] > 0.5f );
 
 		ScopedShaderBinding shaderBinding( shader.GetGLID() );
 		ScopedSamplerActivation activateSampler( 0 );
 		Scoped2DTextureBinding textureBinding( input.Handle );
-		FFGLTexCoords maxCoords = GetMaxGLTexCoords( input );
+		const bool colour = Option( values[ PID_SOURCE ], 2 ) == SOURCE_COLOUR;
 		shader.Set( "inputTexture", 0 );
-		shader.Set( "maxUV", maxCoords.s, maxCoords.t );
-		shader.Set( "len", length );
-		shader.Set( "useCurve", env ? 1 : 0 );
+		shader.Set( "maxUV", inputMax.s, inputMax.t );
+		shader.Set( "wipeLength", length );
+		shader.Set( "wipeUseCurve", env ? 1 : 0 );
 		if( env )
-			glUniform1fv( glGetUniformLocation( shader.GetGLID(), "curve" ), 256, env->lut.data() );
+			glUniform1fv( glGetUniformLocation( shader.GetGLID(), "wipeCurve" ), 256, env->lut.data() );
+		shader.Set( "useColour", colour ? 1 : 0 );
+		shader.Set( "colour", values[ PID_RED ], values[ PID_GREEN ], values[ PID_BLUE ] );
 
-		// Overlapping wipes in one slice combine by keeping the brightest.
+		// Overlapping video wipes combine by keeping the brightest; colour wipes are laid on top.
 		glEnable( GL_BLEND );
-		glBlendEquation( GL_MAX );
+		if( colour )
+			glBlendFunc( GL_ONE, GL_ONE_MINUS_SRC_ALPHA );
+		else
+			glBlendEquation( GL_MAX );
 		ScopedVAOBinding vaoBinding( mesh.VAO() );
-		const int newest = (int)std::floor( position );
-		const int oldest = (int)std::floor( position - duration );
-		for( int j = oldest; j <= newest; ++j )
+		for( const ActiveWipe& wipe : wipes )
 		{
-			float t = ( position - (float)j ) / duration;
-			if( t < 0.f || t >= 1.f )
-				continue;
-			// Wrap around the end of the timeline so a looped Step plays seamlessly.
-			const int stepIndex = ( ( j % total ) + total ) % total % count;
-			const bool odd      = values[ PID_ODD_EVEN ] > 0.5f && stepIndex % 2 == 1;
-			shader.Set( "head", t * ( 1.f + length ) );
-			for( int slice : seq.steps[ stepIndex ] )
+			shader.Set( "wipeHead", wipe.head );
+			for( int slice : seq.steps[ wipe.stepIndex ] )
 			{
 				const SliceRange& range = ranges[ slice ];
-				bool reversed           = range.reversed != ( values[ PID_FLIP ] > 0.5f ) != odd;
-				shader.Set( "alongY", range.alongY ? 1 : 0 );
-				shader.Set( "reversed", reversed ? 1 : 0 );
+				bool reversed           = range.reversed != ( values[ PID_FLIP ] > 0.5f ) != wipe.odd;
+				shader.Set( "wipeAlongY", range.alongY ? 1 : 0 );
+				shader.Set( "wipeReversed", reversed ? 1 : 0 );
 				glDrawArrays( GL_TRIANGLES, range.first, range.count );
 			}
 		}
 		glBlendEquation( GL_FUNC_ADD );
+		glBlendFunc( GL_ONE, GL_ZERO );
 		glDisable( GL_BLEND );
 		return FF_SUCCESS;
 	}
@@ -224,6 +269,14 @@ private:
 		SetParamElements( PID_ENVELOPE, envelopes, Indices( envelopes.size() ), raiseEvents );
 	}
 
+	// The colour only matters for colour wipes.
+	void UpdateVisibility( bool raiseEvents )
+	{
+		const bool colour = Option( values[ PID_SOURCE ], 2 ) == SOURCE_COLOUR;
+		for( int id : { PID_RED, PID_GREEN, PID_BLUE } )
+			SetParamVisibility( id, colour, raiseEvents );
+	}
+
 	float GetDefault( int index )
 	{
 		switch( index )
@@ -231,6 +284,9 @@ private:
 		case PID_SCALING: return (float)SCALING_MASK;
 		case PID_LENGTH:  return 0.25f;
 		case PID_LOOPS:   return 1.f;
+		case PID_RED:
+		case PID_GREEN:
+		case PID_BLUE:    return 1.f;
 		default:          return 0.f;
 		}
 	}
@@ -245,13 +301,8 @@ private:
 		const bool swap           = values[ PID_SWAP ] > 0.5f;
 		for( const Slice& slice : doc->slices )
 		{
-			const Vec2 size   = SliceSize( *doc, slice );
-			bool vertical     = size.y > size.x;
-			if( swap )
-				vertical = !vertical;
-			// Local y runs down the slice, so bottom-to-top is the reversed direction.
-			const bool reversed = vertical ? true : SliceCentre( slice ).x < 0.5f;
-			ranges.push_back( { (GLint)( vertices.size() / 6 ), (GLsizei)slice.indices.size(), vertical, reversed } );
+			const WipeDirection direction = BaseWipeDirection( *doc, slice, swap );
+			ranges.push_back( { (GLint)( vertices.size() / 6 ), (GLsizei)slice.indices.size(), direction.alongY, direction.reversed } );
 			for( uint16_t i : slice.indices )
 			{
 				const Vec2 p     = slice.points[ i ];
@@ -262,7 +313,8 @@ private:
 		}
 	}
 
-	FFGLShader shader;
+	FFGLShader shader, copyShader;
+	FFGLScreenQuad quad;
 	FloatVertexBuffer mesh;
 	std::vector< float > vertices;
 	std::vector< SliceRange > ranges;
@@ -277,8 +329,8 @@ static CFFGLPluginInfo PluginInfo(
 	"STLT-WIPER", // Plugin name
 	2,            // API major version number
 	1,            // API minor version number
-	0,            // Plugin major version number
-	1,            // Plugin minor version number
+	1,            // Plugin major version number
+	2,            // Plugin minor version number
 	FF_EFFECT,
 	"Gradient wipes through Advanced Output slices, step by step through a Stilletchaser sequence",
 	"Stilletchaser" );

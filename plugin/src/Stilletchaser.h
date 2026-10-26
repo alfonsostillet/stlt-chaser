@@ -5,12 +5,16 @@
 #include <vector>
 #include "ChaseDocument.h"
 #include "FrameHistory.h"
+#include "Outline.h"
 #include "PluginCommon.h"
 
 // The all-in-one Stilletchaser effect.
 // Driver decides which slices are lit (Chaser: a sequence stepped by the Step parameter,
 // which Resolume animates with BPM sync, the timeline or FFT; None: every slice of the view).
-// Modules add to it; the Delayer shows each slice's content some time ago.
+// Modules add to it; the Delayer shows each slice's content some time ago, and the Wiper
+// sends gradient wipes through the slices of a second sequence, and the Outliner draws slice
+// outlines on top. Chase and wipes are combined (a slice shows wherever either lights it), so
+// everything works together on the composition.
 class Stilletchaser : public stilletchaser::StilletchaserPlugin
 {
 public:
@@ -31,6 +35,7 @@ public:
 	}
 
 private:
+	// Every slice's triangles, and where its content comes from (the input or a delayed frame).
 	struct SliceDraw
 	{
 		GLint first;
@@ -49,13 +54,20 @@ private:
 	// The full delay (Delay = 100%), in frames or seconds like ComputeDelays.
 	float MaxDelay() const;
 	void UpdateHistory( const FFGLTextureStruct& input, GLuint hostFBO );
-	void BuildVertices( const stilletchaser::ChaseDocument& doc, const std::vector< float >& levels, const std::vector< float >& delays, const FFGLTextureStruct& input );
+	void BuildVertices( const stilletchaser::ChaseDocument& doc, const std::vector< float >& delays, const FFGLTextureStruct& input );
+	std::vector< stilletchaser::ActiveWipe > CurrentWipes( const stilletchaser::ChaseDocument& doc ) const;
+	void DrawWipes( const stilletchaser::ChaseDocument& doc, const FFGLTexCoords& inputMax );
+	void DrawOutlines( const stilletchaser::ChaseDocument& doc, const std::vector< float >& levels );
+	void BindSliceTexture( const SliceDraw& draw, const FFGLTexCoords& inputMax );
+	float WipeParam( unsigned int index ) const;
+	float OutlineParam( unsigned int index ) const;
 
 	ffglex::FFGLShader shader;
 	GLuint vao = 0, vbo = 0;
 	std::vector< float > vertices;
 	std::vector< SliceDraw > draws;
 	stilletchaser::FrameHistory history;
+	stilletchaser::OutlineRenderer outlines;
 
 	std::shared_ptr< const stilletchaser::ChaseDocument > doc;
 	uint64_t docVersion = 0;
@@ -89,4 +101,14 @@ private:
 	float reverse       = 0.f;
 	float autoReset     = 1.f;
 	float resetMinutes  = 5.f;
+
+	// Wiper module: on/off, sequence, step, length, overlap, loops, flip, odd/even, swap, envelope,
+	// source (video or solid colour) and the colour.
+	static const int WIPE_PARAMS = 14;
+	float wipe[ WIPE_PARAMS ] = { 0.f, 0.f, 0.f, 0.25f, 0.f, 1.f, 0.f, 0.f, 0.f, 0.f, 0.f, 1.f, 1.f, 1.f };
+
+	// Outliner module: on/off, target (all or lit slices), outlines only, colour, width, feather,
+	// animate, phase, fan, randomise, length, count, flip, odd/even, envelope.
+	static const int OUTLINE_PARAMS = 17;
+	float outline[ OUTLINE_PARAMS ] = { 0.f, 1.f, 0.f, 1.f, 1.f, 1.f, 10.f, 0.f, 0.f, 0.f, 0.f, 0.f, 0.25f, 1.f, 0.f, 0.f, 0.f };
 };

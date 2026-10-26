@@ -12,7 +12,7 @@ static CFFGLPluginInfo PluginInfo(
 	"STLT-CHASER",  // Plugin name
 	2,              // API major version number
 	1,              // API minor version number
-	0,              // Plugin major version number
+	1,              // Plugin major version number
 	2,              // Plugin minor version number
 	FF_EFFECT,
 	"Chases and delays Advanced Output slices with sequences made in the Stilletchaser editor",
@@ -40,6 +40,51 @@ enum ParamID
 	PID_REVERSE,
 	PID_AUTO_RESET,
 	PID_RESET_MINUTES,
+	// Wiper module, in the order of Stilletchaser::wipe[].
+	PID_WIPER,
+	PID_WIPE_SEQUENCE,
+	PID_WIPE_STEP,
+	PID_WIPE_LENGTH,
+	PID_WIPE_OVERLAP,
+	PID_WIPE_LOOPS,
+	PID_WIPE_FLIP,
+	PID_WIPE_ODD_EVEN,
+	PID_WIPE_SWAP,
+	PID_WIPE_ENVELOPE,
+	PID_WIPE_SOURCE,
+	PID_WIPE_RED,
+	PID_WIPE_GREEN,
+	PID_WIPE_BLUE,
+	// Outliner module, in the order of Stilletchaser::outline[].
+	PID_OUTLINER,
+	PID_OUTLINE_TARGET,
+	PID_OUTLINES_ONLY,
+	PID_OUTLINE_RED,
+	PID_OUTLINE_GREEN,
+	PID_OUTLINE_BLUE,
+	PID_OUTLINE_WIDTH,
+	PID_OUTLINE_FEATHER,
+	PID_OUTLINE_ANIMATE,
+	PID_OUTLINE_PHASE,
+	PID_OUTLINE_FAN,
+	PID_OUTLINE_RANDOMISE,
+	PID_OUTLINE_LENGTH,
+	PID_OUTLINE_COUNT,
+	PID_OUTLINE_FLIP,
+	PID_OUTLINE_ODD_EVEN,
+	PID_OUTLINE_ENVELOPE,
+};
+
+enum OutlineTarget
+{
+	TARGET_ALL,
+	TARGET_LIT,
+};
+
+enum WipeSource
+{
+	SOURCE_VIDEO,
+	SOURCE_COLOUR,
 };
 
 enum Driver
@@ -58,32 +103,41 @@ enum DelayUnit
 static const int MAX_ECHOES        = 32;
 static const int MAX_HISTORY       = 1500;// Frames; about 25 s at 60 fps.
 static const size_t MAX_HISTORY_VRAM = (size_t)3 << 30;
-static const int FLOATS_PER_VERTEX = 5;// position xy, content uv, opacity
+static const int FLOATS_PER_VERTEX = 6;// position xy, content uv, slice-local xy
 
-static const char vertexShaderCode[] = R"(#version 410 core
-uniform vec2 maxUV;
+static const char vertexShaderBody[] = R"(
 layout( location = 0 ) in vec2 compPos;
 layout( location = 1 ) in vec2 contentUV;
-layout( location = 2 ) in float opacity;
+layout( location = 2 ) in vec2 sliceLocal;
 out vec2 uv;
-out float level;
+out vec2 local;
 void main()
 {
-	// compPos is composition space with y down; clip space has y up.
-	gl_Position = vec4( compPos.x * 2.0 - 1.0, 1.0 - compPos.y * 2.0, 0.0, 1.0 );
-	uv          = contentUV * maxUV;
-	level       = opacity;
+	gl_Position = compToClip( compPos );
+	uv          = contentUV;
+	local       = sliceLocal;
 }
 )";
 
-static const char fragmentShaderCode[] = R"(#version 410 core
+// A slice is drawn either at a flat chase level or as a wipe band, showing the content or a
+// solid colour. Draws are combined so a slice shows wherever the chase or a wipe lights it.
+static const char fragmentShaderBody[] = R"(
 uniform sampler2D inputTexture;
+uniform vec2 maxUV;
+uniform float level;
+uniform int wipeMode;
+uniform int useColour;
+uniform vec3 colour;
 in vec2 uv;
-in float level;
+in vec2 local;
 out vec4 fragColor;
 void main()
 {
-	fragColor = texture( inputTexture, uv ) * level;
+	float a = wipeMode != 0 ? wipeAlpha( local ) : level;
+	if( a <= 0.0 )
+		discard;
+	vec4 source = useColour != 0 ? vec4( colour, 1.0 ) : texture( inputTexture, uv * maxUV );
+	fragColor   = source * a;
 }
 )";
 
@@ -134,6 +188,52 @@ Stilletchaser::Stilletchaser()
 	for( unsigned int id = PID_DELAYER; id <= PID_RESET_MINUTES; ++id )
 		SetParamGroup( id, "Delayer" );
 
+	// Wiper module: gradient wipes through the slices of its own sequence, on top of the chase.
+	SetParamInfo( PID_WIPER, "Wiper", FF_TYPE_BOOLEAN, false );
+	SetOptionParamInfo( PID_WIPE_SEQUENCE, "Wipe Sequence", 1, 0.f );
+	SetParamElementInfo( PID_WIPE_SEQUENCE, 0, "-", 0.f );
+	SetParamInfo( PID_WIPE_STEP, "Wipe Step", FF_TYPE_STANDARD, 0.f );
+	SetRangedParamInfo( PID_WIPE_LENGTH, "Wipe Length", FF_TYPE_STANDARD, 0.25f, 0.01f, 1.f );
+	SetRangedParamInfo( PID_WIPE_OVERLAP, "Wipe Overlap", FF_TYPE_STANDARD, 0.f, 0.f, 0.95f );
+	SetRangedParamInfo( PID_WIPE_LOOPS, "Wipe Loops", FF_TYPE_INTEGER, 1.f, 1.f, (float)MAX_WIPE_LOOPS );
+	SetParamInfo( PID_WIPE_FLIP, "Wipe Flip", FF_TYPE_BOOLEAN, false );
+	SetParamInfo( PID_WIPE_ODD_EVEN, "Wipe Odd/Even", FF_TYPE_BOOLEAN, false );
+	SetParamInfo( PID_WIPE_SWAP, "Wipe Swap", FF_TYPE_BOOLEAN, false );
+	SetOptionParamInfo( PID_WIPE_ENVELOPE, "Wipe Envelope", 1, 0.f );
+	SetParamElementInfo( PID_WIPE_ENVELOPE, 0, "Gradient", 0.f );
+	SetOptionParamInfo( PID_WIPE_SOURCE, "Wipe Source", 2, (float)SOURCE_VIDEO );
+	SetParamElementInfo( PID_WIPE_SOURCE, SOURCE_VIDEO, "Video", (float)SOURCE_VIDEO );
+	SetParamElementInfo( PID_WIPE_SOURCE, SOURCE_COLOUR, "Solid Color", (float)SOURCE_COLOUR );
+	SetParamInfo( PID_WIPE_RED, "Wipe Red", FF_TYPE_RED, 1.f );
+	SetParamInfo( PID_WIPE_GREEN, "Wipe Green", FF_TYPE_GREEN, 1.f );
+	SetParamInfo( PID_WIPE_BLUE, "Wipe Blue", FF_TYPE_BLUE, 1.f );
+	for( unsigned int id = PID_WIPER; id <= PID_WIPE_BLUE; ++id )
+		SetParamGroup( id, "Wiper" );
+
+	// Outliner module: outlines over every slice of the view, or only over the lit ones.
+	SetParamInfo( PID_OUTLINER, "Outliner", FF_TYPE_BOOLEAN, false );
+	SetOptionParamInfo( PID_OUTLINE_TARGET, "Outline Target", 2, (float)TARGET_LIT );
+	SetParamElementInfo( PID_OUTLINE_TARGET, TARGET_ALL, "All Slices", (float)TARGET_ALL );
+	SetParamElementInfo( PID_OUTLINE_TARGET, TARGET_LIT, "Lit Slices", (float)TARGET_LIT );
+	SetParamInfo( PID_OUTLINES_ONLY, "Outlines Only", FF_TYPE_BOOLEAN, false );
+	SetParamInfo( PID_OUTLINE_RED, "Outline Red", FF_TYPE_RED, 1.f );
+	SetParamInfo( PID_OUTLINE_GREEN, "Outline Green", FF_TYPE_GREEN, 1.f );
+	SetParamInfo( PID_OUTLINE_BLUE, "Outline Blue", FF_TYPE_BLUE, 1.f );
+	SetRangedParamInfo( PID_OUTLINE_WIDTH, "Outline Width", FF_TYPE_STANDARD, 10.f, 1.f, 300.f );
+	SetRangedParamInfo( PID_OUTLINE_FEATHER, "Outline Feather", FF_TYPE_STANDARD, 0.f, 0.f, 500.f );
+	SetParamInfo( PID_OUTLINE_ANIMATE, "Outline Animate", FF_TYPE_BOOLEAN, false );
+	SetParamInfo( PID_OUTLINE_PHASE, "Outline Phase", FF_TYPE_STANDARD, 0.f );
+	SetParamInfo( PID_OUTLINE_FAN, "Outline Fan", FF_TYPE_STANDARD, 0.f );
+	SetParamInfo( PID_OUTLINE_RANDOMISE, "Outline Randomise", FF_TYPE_STANDARD, 0.f );
+	SetRangedParamInfo( PID_OUTLINE_LENGTH, "Outline Length", FF_TYPE_STANDARD, 0.25f, 0.01f, 1.f );
+	SetRangedParamInfo( PID_OUTLINE_COUNT, "Outline Count", FF_TYPE_INTEGER, 1.f, 1.f, (float)OutlineRenderer::MAX_LINES );
+	SetParamInfo( PID_OUTLINE_FLIP, "Outline Flip", FF_TYPE_BOOLEAN, false );
+	SetParamInfo( PID_OUTLINE_ODD_EVEN, "Outline Odd/Even", FF_TYPE_BOOLEAN, false );
+	SetOptionParamInfo( PID_OUTLINE_ENVELOPE, "Outline Envelope", 1, 0.f );
+	SetParamElementInfo( PID_OUTLINE_ENVELOPE, 0, "Taper", 0.f );
+	for( unsigned int id = PID_OUTLINER; id <= PID_OUTLINE_ENVELOPE; ++id )
+		SetParamGroup( id, "Outliner" );
+
 	doc        = DocumentWatcher::Instance().Current();
 	docVersion = DocumentWatcher::Instance().Version();
 	RefreshMenus( false );
@@ -149,8 +249,13 @@ void Stilletchaser::RefreshMenus( bool raiseEvents )
 	const auto envelopes = EnvelopeNames( *doc, "Sustain / Release" );
 	SetParamElements( PID_SEQUENCE, sequences, Indices( sequences.size() ), raiseEvents );
 	SetParamElements( PID_DELAY_SEQUENCE, sequences, Indices( sequences.size() ), raiseEvents );
+	SetParamElements( PID_WIPE_SEQUENCE, sequences, Indices( sequences.size() ), raiseEvents );
 	SetParamElements( PID_VIEW, views, Indices( views.size() ), raiseEvents );
 	SetParamElements( PID_ENVELOPE, envelopes, Indices( envelopes.size() ), raiseEvents );
+	const auto wipeEnvelopes = EnvelopeNames( *doc, "Gradient" );
+	SetParamElements( PID_WIPE_ENVELOPE, wipeEnvelopes, Indices( wipeEnvelopes.size() ), raiseEvents );
+	const auto outlineEnvelopes = EnvelopeNames( *doc, "Taper" );
+	SetParamElements( PID_OUTLINE_ENVELOPE, outlineEnvelopes, Indices( outlineEnvelopes.size() ), raiseEvents );
 	UpdateVisibility( raiseEvents );
 }
 
@@ -172,11 +277,39 @@ void Stilletchaser::UpdateVisibility( bool raiseEvents )
 	SetParamVisibility( PID_MAX_SECONDS, delaying && unit == UNIT_SECONDS, raiseEvents );
 	SetParamVisibility( PID_MAX_BEATS, delaying && unit == UNIT_BEATS, raiseEvents );
 	SetParamVisibility( PID_RESET_MINUTES, delaying && autoReset > 0.5f, raiseEvents );
+
+	const bool wiping = WipeParam( PID_WIPER ) > 0.5f;
+	const bool colour = Option( WipeParam( PID_WIPE_SOURCE ), 2 ) == SOURCE_COLOUR;
+	for( unsigned int id = PID_WIPE_SEQUENCE; id <= PID_WIPE_SOURCE; ++id )
+		SetParamVisibility( id, wiping, raiseEvents );
+	for( unsigned int id = PID_WIPE_RED; id <= PID_WIPE_BLUE; ++id )
+		SetParamVisibility( id, wiping && colour, raiseEvents );
+
+	// Feather is for static outlines; the animation controls only matter when animating.
+	const bool outlining = OutlineParam( PID_OUTLINER ) > 0.5f;
+	const bool animate   = OutlineParam( PID_OUTLINE_ANIMATE ) > 0.5f;
+	for( unsigned int id = PID_OUTLINE_TARGET; id <= PID_OUTLINE_ANIMATE; ++id )
+		SetParamVisibility( id, outlining, raiseEvents );
+	SetParamVisibility( PID_OUTLINE_FEATHER, outlining && !animate, raiseEvents );
+	for( unsigned int id = PID_OUTLINE_PHASE; id <= PID_OUTLINE_ENVELOPE; ++id )
+		SetParamVisibility( id, outlining && animate, raiseEvents );
+}
+
+float Stilletchaser::WipeParam( unsigned int index ) const
+{
+	return wipe[ index - PID_WIPER ];
+}
+
+float Stilletchaser::OutlineParam( unsigned int index ) const
+{
+	return outline[ index - PID_OUTLINER ];
 }
 
 FFResult Stilletchaser::InitGL( const FFGLViewportStruct* vp )
 {
-	if( !shader.Compile( vertexShaderCode, fragmentShaderCode ) || !history.InitGL() )
+	const std::string vertex   = std::string( CompositionVertexHeader() ) + vertexShaderBody;
+	const std::string fragment = std::string( "#version 410 core\n" ) + WipeAlphaGLSL() + fragmentShaderBody;
+	if( !shader.Compile( vertex, fragment ) || !history.InitGL() || !outlines.InitGL() )
 	{
 		DeInitGL();
 		return FF_FAIL;
@@ -185,12 +318,11 @@ FFResult Stilletchaser::InitGL( const FFGLViewportStruct* vp )
 	glGenBuffers( 1, &vbo );
 	glBindVertexArray( vao );
 	glBindBuffer( GL_ARRAY_BUFFER, vbo );
-	glEnableVertexAttribArray( 0 );
-	glVertexAttribPointer( 0, 2, GL_FLOAT, GL_FALSE, FLOATS_PER_VERTEX * sizeof( float ), (void*)0 );
-	glEnableVertexAttribArray( 1 );
-	glVertexAttribPointer( 1, 2, GL_FLOAT, GL_FALSE, FLOATS_PER_VERTEX * sizeof( float ), (void*)( 2 * sizeof( float ) ) );
-	glEnableVertexAttribArray( 2 );
-	glVertexAttribPointer( 2, 1, GL_FLOAT, GL_FALSE, FLOATS_PER_VERTEX * sizeof( float ), (void*)( 4 * sizeof( float ) ) );
+	for( GLuint attribute = 0; attribute < 3; ++attribute )
+	{
+		glEnableVertexAttribArray( attribute );
+		glVertexAttribPointer( attribute, 2, GL_FLOAT, GL_FALSE, FLOATS_PER_VERTEX * sizeof( float ), (void*)( attribute * 2 * sizeof( float ) ) );
+	}
 	glBindVertexArray( 0 );
 	glBindBuffer( GL_ARRAY_BUFFER, 0 );
 	return CFFGLPlugin::InitGL( vp );
@@ -200,6 +332,7 @@ FFResult Stilletchaser::DeInitGL()
 {
 	shader.FreeGLResources();
 	history.DeInitGL();
+	outlines.DeInitGL();
 	if( vbo )
 		glDeleteBuffers( 1, &vbo );
 	if( vao )
@@ -337,7 +470,8 @@ void Stilletchaser::UpdateHistory( const FFGLTextureStruct& input, GLuint hostFB
 	history.Push( input, hostFBO, frameTime );
 }
 
-void Stilletchaser::BuildVertices( const ChaseDocument& d, const std::vector< float >& levels, const std::vector< float >& delays, const FFGLTextureStruct& input )
+// Every slice, lit or not: the Wiper can run through any of them.
+void Stilletchaser::BuildVertices( const ChaseDocument& d, const std::vector< float >& delays, const FFGLTextureStruct& input )
 {
 	vertices.clear();
 	draws.clear();
@@ -347,8 +481,6 @@ void Stilletchaser::BuildVertices( const ChaseDocument& d, const std::vector< fl
 
 	for( size_t s = 0; s < d.slices.size(); ++s )
 	{
-		if( levels[ s ] <= 0.f )
-			continue;
 		const Slice& slice = d.slices[ s ];
 		SliceDraw draw{ (GLint)( vertices.size() / FLOATS_PER_VERTEX ), (GLsizei)slice.indices.size(), input.Handle, false };
 		if( delaying )
@@ -360,11 +492,130 @@ void Stilletchaser::BuildVertices( const ChaseDocument& d, const std::vector< fl
 
 		for( uint16_t i : slice.indices )
 		{
-			const Vec2 p  = slice.points[ i ];
-			const Vec2 uv = ContentUV( d, slice, p, mode, contentAspect );
-			vertices.insert( vertices.end(), { p.x, p.y, uv.x, uv.y, levels[ s ] } );
+			const Vec2 p     = slice.points[ i ];
+			const Vec2 uv    = ContentUV( d, slice, p, mode, contentAspect );
+			const Vec2 local = SliceLocal( slice, p );
+			vertices.insert( vertices.end(), { p.x, p.y, uv.x, uv.y, local.x, local.y } );
 		}
 	}
+}
+
+void Stilletchaser::BindSliceTexture( const SliceDraw& draw, const FFGLTexCoords& inputMax )
+{
+	glBindTexture( GL_TEXTURE_2D, draw.texture );
+	// History frames are stored at exactly their own size, so their whole area is image.
+	if( draw.fromHistory )
+		shader.Set( "maxUV", 1.f, 1.f );
+	else
+		shader.Set( "maxUV", inputMax.s, inputMax.t );
+}
+
+// The wipes of the wipe sequence running at this moment (none while the Wiper is off).
+std::vector< ActiveWipe > Stilletchaser::CurrentWipes( const ChaseDocument& d ) const
+{
+	if( WipeParam( PID_WIPER ) <= 0.5f || d.sequences.empty() )
+		return {};
+	const Sequence& seq = d.sequences[ Option( WipeParam( PID_WIPE_SEQUENCE ), (int)d.sequences.size() ) ];
+	return ActiveWipes( (int)seq.steps.size(), WipeParam( PID_WIPE_STEP ), (int)std::lround( WipeParam( PID_WIPE_LOOPS ) ),
+						std::clamp( WipeParam( PID_WIPE_LENGTH ), 0.01f, 1.f ), WipeParam( PID_WIPE_OVERLAP ), WipeParam( PID_WIPE_ODD_EVEN ) > 0.5f );
+}
+
+// The Wiper module: wipe bands through the slices of the wipe sequence's running steps.
+void Stilletchaser::DrawWipes( const ChaseDocument& d, const FFGLTexCoords& inputMax )
+{
+	const auto wipes = CurrentWipes( d );
+	if( wipes.empty() )
+		return;
+	const Sequence& seq = d.sequences[ Option( WipeParam( PID_WIPE_SEQUENCE ), (int)d.sequences.size() ) ];
+	const View& v       = d.views[ Option( view, (int)d.views.size() ) ];
+	const float length  = std::clamp( WipeParam( PID_WIPE_LENGTH ), 0.01f, 1.f );
+	const Envelope* env = ChosenEnvelope( d, WipeParam( PID_WIPE_ENVELOPE ) );
+	const bool colour   = Option( WipeParam( PID_WIPE_SOURCE ), 2 ) == SOURCE_COLOUR;
+	const bool flip     = WipeParam( PID_WIPE_FLIP ) > 0.5f;
+	const bool swap     = WipeParam( PID_WIPE_SWAP ) > 0.5f;
+
+	shader.Set( "wipeMode", 1 );
+	shader.Set( "wipeLength", length );
+	shader.Set( "wipeUseCurve", env ? 1 : 0 );
+	if( env )
+		glUniform1fv( glGetUniformLocation( shader.GetGLID(), "wipeCurve" ), 256, env->lut.data() );
+	shader.Set( "useColour", colour ? 1 : 0 );
+	shader.Set( "colour", WipeParam( PID_WIPE_RED ), WipeParam( PID_WIPE_GREEN ), WipeParam( PID_WIPE_BLUE ) );
+	// Video wipes show the same content as the chase: keep the brightest of the two.
+	// Colour wipes are laid over it.
+	if( colour )
+	{
+		glBlendEquation( GL_FUNC_ADD );
+		glBlendFunc( GL_ONE, GL_ONE_MINUS_SRC_ALPHA );
+	}
+
+	for( const ActiveWipe& active : wipes )
+	{
+		shader.Set( "wipeHead", active.head );
+		for( int slice : seq.steps[ active.stepIndex ] )
+		{
+			if( !v.includes[ slice ] )
+				continue;
+			const WipeDirection direction = BaseWipeDirection( d, d.slices[ slice ], swap );
+			shader.Set( "wipeAlongY", direction.alongY ? 1 : 0 );
+			shader.Set( "wipeReversed", ( direction.reversed != flip != active.odd ) ? 1 : 0 );
+			BindSliceTexture( draws[ slice ], inputMax );
+			glDrawArrays( GL_TRIANGLES, draws[ slice ].first, draws[ slice ].count );
+		}
+	}
+	shader.Set( "useColour", 0 );
+	shader.Set( "wipeMode", 0 );
+}
+
+// The Outliner module. Lit Slices follows the chase (an echo's outline fades with it) and the
+// wipes (a slice is outlined while a wipe runs through it); All Slices outlines the whole view.
+void Stilletchaser::DrawOutlines( const ChaseDocument& d, const std::vector< float >& levels )
+{
+	if( OutlineParam( PID_OUTLINER ) <= 0.5f )
+		return;
+	const View& v = d.views[ Option( view, (int)d.views.size() ) ];
+	std::vector< float > strength( d.slices.size(), 0.f );
+	if( Option( OutlineParam( PID_OUTLINE_TARGET ), 2 ) == TARGET_ALL )
+	{
+		for( size_t s = 0; s < strength.size(); ++s )
+			strength[ s ] = v.includes[ s ] ? 1.f : 0.f;
+	}
+	else
+	{
+		strength = levels;
+		const auto wipes = CurrentWipes( d );
+		if( !wipes.empty() )
+		{
+			const Sequence& seq = d.sequences[ Option( WipeParam( PID_WIPE_SEQUENCE ), (int)d.sequences.size() ) ];
+			const float length  = std::clamp( WipeParam( PID_WIPE_LENGTH ), 0.01f, 1.f );
+			for( const ActiveWipe& active : wipes )
+			{
+				// Before it enters or after its tail has left, the band shows nothing.
+				if( active.head <= 0.f || active.head - length >= 1.f )
+					continue;
+				for( int slice : seq.steps[ active.stepIndex ] )
+					if( v.includes[ slice ] )
+						strength[ slice ] = 1.f;
+			}
+		}
+	}
+
+	OutlineStyle style;
+	style.red       = OutlineParam( PID_OUTLINE_RED );
+	style.green     = OutlineParam( PID_OUTLINE_GREEN );
+	style.blue      = OutlineParam( PID_OUTLINE_BLUE );
+	style.width     = OutlineParam( PID_OUTLINE_WIDTH );
+	style.feather   = OutlineParam( PID_OUTLINE_FEATHER );
+	style.animate   = OutlineParam( PID_OUTLINE_ANIMATE ) > 0.5f;
+	style.phase     = OutlineParam( PID_OUTLINE_PHASE );
+	style.fan       = OutlineParam( PID_OUTLINE_FAN );
+	style.randomise = OutlineParam( PID_OUTLINE_RANDOMISE );
+	style.length    = OutlineParam( PID_OUTLINE_LENGTH );
+	style.count     = (int)std::lround( OutlineParam( PID_OUTLINE_COUNT ) );
+	style.flip      = OutlineParam( PID_OUTLINE_FLIP ) > 0.5f;
+	style.oddEven   = OutlineParam( PID_OUTLINE_ODD_EVEN ) > 0.5f;
+	style.envelope  = ChosenEnvelope( d, OutlineParam( PID_OUTLINE_ENVELOPE ) );
+	outlines.Draw( d, style, strength, nullptr );
 }
 
 FFResult Stilletchaser::ProcessOpenGL( ProcessOpenGLStruct* pGL )
@@ -393,28 +644,41 @@ FFResult Stilletchaser::ProcessOpenGL( ProcessOpenGLStruct* pGL )
 	std::vector< float > delays;
 	ComputeLevels( *doc, levels );
 	ComputeDelays( *doc, delays );
-	BuildVertices( *doc, levels, delays, input );
+	BuildVertices( *doc, delays, input );
 	if( vertices.empty() )
 		return FF_SUCCESS;
 
-	ScopedShaderBinding shaderBinding( shader.GetGLID() );
-	ScopedSamplerActivation activateSampler( 0 );
-	shader.Set( "inputTexture", 0 );
-	const FFGLTexCoords inputMax = GetMaxGLTexCoords( input );
-
-	ScopedVAOBinding vaoBinding( vao );
-	ScopedVBOBinding vboBinding( vbo );
-	glBufferData( GL_ARRAY_BUFFER, vertices.size() * sizeof( float ), vertices.data(), GL_STREAM_DRAW );
-	for( const SliceDraw& draw : draws )
+	// Outlines Only leaves out the chase and wipe content and keeps just the outlines.
+	const bool content = OutlineParam( PID_OUTLINER ) <= 0.5f || OutlineParam( PID_OUTLINES_ONLY ) <= 0.5f;
+	if( content )
 	{
-		// History frames are stored at exactly their own size, so their whole area is image.
-		Scoped2DTextureBinding textureBinding( draw.texture );
-		if( draw.fromHistory )
-			shader.Set( "maxUV", 1.f, 1.f );
-		else
-			shader.Set( "maxUV", inputMax.s, inputMax.t );
-		glDrawArrays( GL_TRIANGLES, draw.first, draw.count );
+		ScopedShaderBinding shaderBinding( shader.GetGLID() );
+		ScopedSamplerActivation activateSampler( 0 );
+		Scoped2DTextureBinding textureBinding( input.Handle );// Restores the texture binding afterwards.
+		shader.Set( "inputTexture", 0 );
+		shader.Set( "wipeMode", 0 );
+		shader.Set( "useColour", 0 );
+		const FFGLTexCoords inputMax = GetMaxGLTexCoords( input );
+
+		ScopedVAOBinding vaoBinding( vao );
+		ScopedVBOBinding vboBinding( vbo );
+		glBufferData( GL_ARRAY_BUFFER, vertices.size() * sizeof( float ), vertices.data(), GL_STREAM_DRAW );
+		glEnable( GL_BLEND );
+		glBlendEquation( GL_MAX );
+		for( size_t s = 0; s < draws.size(); ++s )
+		{
+			if( levels[ s ] <= 0.f )
+				continue;
+			shader.Set( "level", levels[ s ] );
+			BindSliceTexture( draws[ s ], inputMax );
+			glDrawArrays( GL_TRIANGLES, draws[ s ].first, draws[ s ].count );
+		}
+		DrawWipes( *doc, inputMax );
+		glBlendEquation( GL_FUNC_ADD );
+		glBlendFunc( GL_ONE, GL_ZERO );
+		glDisable( GL_BLEND );
 	}
+	DrawOutlines( *doc, levels );
 	return FF_SUCCESS;
 }
 
@@ -457,7 +721,21 @@ FFResult Stilletchaser::SetFloatParameter( unsigned int index, float value )
 		UpdateVisibility( true );
 		break;
 	case PID_RESET_MINUTES: resetMinutes = value; break;
-	default:                return FF_FAIL;
+	default:
+		if( index >= PID_WIPER && index < PID_WIPER + WIPE_PARAMS )
+		{
+			wipe[ index - PID_WIPER ] = value;
+			if( index == PID_WIPER || index == PID_WIPE_SOURCE )
+				UpdateVisibility( true );
+		}
+		else if( index >= PID_OUTLINER && index < PID_OUTLINER + OUTLINE_PARAMS )
+		{
+			outline[ index - PID_OUTLINER ] = value;
+			if( index == PID_OUTLINER || index == PID_OUTLINE_ANIMATE )
+				UpdateVisibility( true );
+		}
+		else
+			return FF_FAIL;
 	}
 	return FF_SUCCESS;
 }
@@ -486,18 +764,25 @@ float Stilletchaser::GetFloatParameter( unsigned int index )
 	case PID_REVERSE:        return reverse;
 	case PID_AUTO_RESET:     return autoReset;
 	case PID_RESET_MINUTES:  return resetMinutes;
-	default:                 return 0.f;
+	default:
+		if( index >= PID_WIPER && index < PID_WIPER + WIPE_PARAMS )
+			return wipe[ index - PID_WIPER ];
+		if( index >= PID_OUTLINER && index < PID_OUTLINER + OUTLINE_PARAMS )
+			return outline[ index - PID_OUTLINER ];
+		return 0.f;
 	}
 }
 
 char* Stilletchaser::GetParameterDisplay( unsigned int index )
 {
 	static char display[ 48 ];
-	if( index == PID_STEP && doc && !doc->sequences.empty() )
+	if( ( index == PID_STEP || index == PID_WIPE_STEP ) && doc && !doc->sequences.empty() )
 	{
-		const Sequence& seq = doc->sequences[ Option( sequence, (int)doc->sequences.size() ) ];
+		const bool wipeStep = index == PID_WIPE_STEP;
+		const Sequence& seq = doc->sequences[ Option( wipeStep ? WipeParam( PID_WIPE_SEQUENCE ) : sequence, (int)doc->sequences.size() ) ];
 		int count           = (int)seq.steps.size();
-		int current         = std::min( (int)( step * (float)count ), count - 1 ) + 1;
+		float position      = wipeStep ? WipeParam( PID_WIPE_STEP ) : step;
+		int current         = std::min( (int)( position * (float)count ), count - 1 ) + 1;
 		std::snprintf( display, sizeof( display ), "%d / %d", current, count );
 		return display;
 	}

@@ -332,6 +332,64 @@ int main( int argc, char** argv )
 	// B is 50x100 (portrait) and the content square: Fill crops the content's sides, so B's left edge shows x ~25%.
 	Check( fill > 118 && fill < 138 && fillEdge > 55 && fillEdge < 75, "Fill crops the content to the slice's shape" );
 
+	// Wiper module: the chase lights A (step 1) while a wipe runs through B (step 2 of the wipe
+	// sequence). On the composition both must show at once.
+	{
+		gradient = false;
+		host.Set( scaling, 0.f );
+		host.Set( driver, 0.f );
+		host.Set( sustain, 1.f );
+		host.Set( release, 1.f );
+		host.Set( step, 0.25f );
+		const int wiper = host.FindParam( "Wiper" ), wipeSeq = host.FindParam( "Wipe Sequence" ), wipeStep = host.FindParam( "Wipe Step" );
+		const int wipeLength = host.FindParam( "Wipe Length" ), wipeSource = host.FindParam( "Wipe Source" ), wipeGreen = host.FindParam( "Wipe Green" );
+		const int wipeBlue = host.FindParam( "Wipe Blue" );
+		auto at = [ & ]( int x, int row, int channel ) { return (int)pixels[ ( row * size + x ) * 4 + channel ]; };
+		Check( !host.Visible( wipeSeq ), "Wiper module hidden while off" );
+		host.Set( wiper, 1.f );
+		Check( host.Visible( wipeSeq ) && !host.Visible( wipeGreen ), "Wiper module shown; colour hidden while Source is Video" );
+		host.Set( wipeSeq, 0.f );
+		host.Set( wipeLength, 0.5f );
+		host.Set( wipeStep, 0.75f );
+		render();
+		std::printf( "      chase + wipe: A middle green %d, B upper %d, B middle %d, B top %d\n", at( 25, 50, 1 ), at( 75, 70, 1 ), at( 75, 50, 1 ), at( 75, 95, 1 ) );
+		Check( at( 25, 50, 1 ) == 200, "Wiper module: the chase stays fully lit" );
+		Check( at( 75, 70, 1 ) > 160 && at( 75, 50, 1 ) > 80 && at( 75, 95, 1 ) == 0, "Wiper module: the wipe runs through another slice at the same time" );
+		host.Set( wipeSource, 1.f );
+		host.Set( wipeGreen, 0.f );
+		host.Set( wipeBlue, 0.f );
+		Check( host.Visible( wipeGreen ), "Wiper module: colour shown for Solid Color" );
+		render();
+		std::printf( "      colour wipe: B upper rgb %d %d %d\n", at( 75, 70, 0 ), at( 75, 70, 1 ), at( 75, 70, 2 ) );
+		Check( at( 75, 70, 0 ) > 160 && at( 75, 70, 1 ) == 0 && at( 25, 50, 1 ) == 200, "Wiper module: Solid Color wipes in red next to the chase" );
+
+		// Outliner module, white 10 px outlines. Lit Slices: A (chase) and B (wipe) while the wipe runs.
+		const int outliner = host.FindParam( "Outliner" ), oTarget = host.FindParam( "Outline Target" ), oOnly = host.FindParam( "Outlines Only" );
+		const int oWidth = host.FindParam( "Outline Width" ), oPhase = host.FindParam( "Outline Phase" );
+		Check( !host.Visible( oTarget ), "Outliner module hidden while off" );
+		host.Set( outliner, 1.f );
+		Check( host.Visible( oTarget ) && host.Visible( oWidth ) && !host.Visible( oPhase ), "Outliner module shown; animation controls hidden until Animate" );
+		render();
+		std::printf( "      outlines: A edge rgba %d %d %d %d, A middle green %d, B edge %d %d %d %d\n", at( 2, 50, 0 ), at( 2, 50, 1 ), at( 2, 50, 2 ), at( 2, 50, 3 ),
+					 at( 25, 50, 1 ), at( 97, 50, 0 ), at( 97, 50, 1 ), at( 97, 50, 2 ), at( 97, 50, 3 ) );
+		Check( at( 2, 50, 0 ) == 255 && at( 2, 50, 1 ) == 255 && at( 25, 50, 1 ) == 200, "Outliner module: the chased slice is outlined over its content" );
+		Check( at( 97, 50, 0 ) == 255 && at( 97, 50, 1 ) == 255 && at( 97, 50, 3 ) == 255, "Outliner module: Lit Slices also outlines the slice a wipe runs through" );
+		host.Set( wiper, 0.f );
+		render();
+		Check( at( 2, 50, 3 ) == 255 && at( 97, 50, 3 ) == 0, "Outliner module: Lit Slices leaves unlit slices alone" );
+		host.Set( oTarget, 0.f );
+		render();
+		Check( at( 97, 50, 3 ) == 255 && at( 75, 50, 3 ) == 0, "Outliner module: All Slices outlines every slice of the view" );
+		host.Set( oOnly, 1.f );
+		render();
+		Check( at( 25, 50, 3 ) == 0 && at( 2, 50, 3 ) == 255, "Outliner module: Outlines Only hides the content" );
+		host.Set( oOnly, 0.f );
+		host.Set( oTarget, 1.f );
+		host.Set( outliner, 0.f );
+		render();
+		Check( at( 2, 50, 1 ) == 200, "Outliner module off: no outlines" );
+	}
+
 	FFMixed none;
 	none.UIntValue = 0;
 	host.Call( FF_DEINSTANTIATE_GL, none );
@@ -365,6 +423,17 @@ int main( int argc, char** argv )
 		host.Set( wOverlap, 0.5f );
 		render();
 		Check( aTopNoOverlap == 0 && at( 25, 95 ) > 0, "Wiper: with Overlap the previous wipe is still finishing" );
+
+		// Solid colour over the original: B shows the red wipe blended over the incoming green.
+		host.Set( wOverlap, 0.f );
+		host.Set( host.FindParam( "Source" ), 1.f );
+		host.Set( host.FindParam( "Green" ), 0.f );
+		host.Set( host.FindParam( "Blue" ), 0.f );
+		host.Set( host.FindParam( "Show Original" ), 1.f );
+		render();
+		auto rgb = [ & ]( int x, int row, int channel ) { return (int)pixels[ ( row * size + x ) * 4 + channel ]; };
+		std::printf( "      colour over original: A middle rgb %d %d, B upper rgb %d %d\n", rgb( 25, 50, 0 ), rgb( 25, 50, 1 ), rgb( 75, 70, 0 ), rgb( 75, 70, 1 ) );
+		Check( rgb( 25, 50, 1 ) == 200 && rgb( 75, 70, 0 ) > 160 && rgb( 75, 70, 1 ) < 60, "Wiper: Solid Color with Show Original lays red wipes over the video" );
 		host.Call( FF_DEINSTANTIATE_GL, none );
 	}
 

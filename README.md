@@ -38,12 +38,18 @@ Requirements: Resolume Arena or Avenue 7.4 or later (tested with Arena 7.23 on W
 **STLT-CHASER** – lights slices step by step through a sequence.
 *Driver* (Chaser, or None to keep every slice lit), *Sequence*, *Step* (0→1 runs through the sequence; animate it with BPM sync, the timeline or FFT), *Scaling* (Mask, Fill, Stretch), *View*, *Echoes*, *Envelope* or *Sustain / Release*.
 Its **Delayer** module shows each slice as the content was some time ago, with the delay spread over the stage by a *Delay Sequence* (first step: no delay, last step: the full delay), in frames, seconds or beats.
+Its **Wiper** module runs gradient wipes through the slices of a second sequence (*Wipe Sequence*, *Wipe Step* and the same controls as STLT-WIPER), showing the video or a *Solid Color*. Chase and wipes add up: a slice shows wherever either lights it, so one STLT-CHASER on the composition does both.
+Its **Outliner** module draws outlines on top with the same controls as STLT-OUTLINER. *Outline Target*: *Lit Slices* follows the chase and the wipes, *All Slices* outlines the whole view; *Outlines Only* hides the video and keeps just the outlines.
 
-**STLT-WIPER** – each step sends a gradient wipe through its slices. Vertical slices wipe bottom to top, horizontal ones away from the centre of the stage. *Length*, *Overlap*, *Loops*, *Flip Direction*, *Odd/Even*, *Swap Directions*, *Envelope*.
+**STLT-WIPER** – each step sends a gradient wipe through its slices. Vertical slices wipe bottom to top, horizontal ones away from the centre of the stage. *Length*, *Overlap*, *Loops*, *Flip Direction*, *Odd/Even*, *Swap Directions*, *Envelope*. *Source*: the video or a *Solid Color*; *Show Original* draws the wipes over what comes in instead of on a transparent background.
 
 **STLT-OUTLINER** – outlines drawn inside every slice, so they never bleed into neighbours. Static with an inward *Feather*, or animated tapered lines running around the edges (*Phase*, *Fan*, *Randomise*, *Length*, *Count*, *Flip Direction*, *Odd/Even*). *Show Original* draws them over the incoming video; *Lit Slices Only* outlines just the slices an STLT-CHASER above it is lighting.
 
-Effects in Resolume work in a chain. To combine STLT-CHASER and STLT-WIPER on the same content, put them on two layers with the same clip and blend the second with *Add*.
+Effects in Resolume work in a chain: each one only sees what the one above lets through.
+- **Chase, wipes and outlines on the whole composition**: one STLT-CHASER on the composition with its Wiper and Outliner modules on. Layers and clips can change freely underneath.
+- **STLT-CHASER → STLT-WIPER** (Solid Color, Show Original on): coloured wipes over the chase.
+- **STLT-CHASER → STLT-OUTLINER** (*Lit Slices Only*): outlines on the lit slices.
+- *Scaling*: use **Fill** or **Stretch** for full-frame clips, **Mask** for content that is already laid out over the stage (another STLT effect's output, a mapped layer, the composition).
 
 ## The editor
 

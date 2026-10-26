@@ -35,6 +35,10 @@ Chase e screen bump sulle slice dell'Advanced Output di Resolume Arena: un edito
    - *Auto Reset* / *Reset After (min)*: dopo una pausa così lunga i fotogrammi vecchi vengono dimenticati.
    - Attenzione: ritardi lunghi usano molta memoria video (es. 2 battute a 120 BPM, 60 fps, 1920×1080 al 75 % ≈ 280 MB). Il plugin si limita a 3 GB.
    - Delayer e Chaser si sommano: con Driver Chaser vedi il contenuto ritardato solo nelle slice accese.
+6. **Wiper** (spunta *Wiper* nel gruppo Wiper): wipe che scorrono nelle slice di una seconda sequenza (*Wipe Sequence*, *Wipe Step*, *Wipe Length*, *Wipe Overlap*, *Wipe Loops*, *Wipe Flip*, *Wipe Odd/Even*, *Wipe Swap*, *Wipe Envelope*), con il video o un colore pieno (*Wipe Source*). Chase e wipe si sommano: una slice si vede se la accende il chase oppure se ci passa un wipe, quindi un solo STLT-CHASER sulla composizione fa entrambe le cose.
+7. **Outliner** (spunta *Outliner* nel gruppo Outliner): contorni sopra le slice, con gli stessi controlli di STLT-OUTLINER (*Outline Red / Green / Blue*, *Outline Width*, *Outline Feather*, *Outline Animate* e le relative *Phase*, *Fan*, *Randomise*, *Length*, *Count*, *Flip*, *Odd/Even*, *Envelope*).
+   - *Outline Target*: *Lit Slices* (default) contorna solo le slice accese dal chase (seguendo la dissolvenza degli echi) o attraversate da un wipe; *All Slices* contorna tutte le slice della View.
+   - *Outlines Only*: nasconde video e wipe e lascia solo i contorni.
 
 ## Effetti indipendenti
 
@@ -46,6 +50,7 @@ Usano lo stesso documento dell'editor, ma ognuno funziona da solo.
 - *Length*: lunghezza della sfumatura (frazione della slice). *Overlap*: il passo dopo parte prima che finisca quello prima (con Length corta e un po' di Overlap scorrono più sfumature insieme). *Loops*: quante volte la sequenza si ripete mentre Step va da 0 a 1.
 - *Flip Direction* inverte tutte le direzioni, *Odd/Even* inverte i passi dispari, *Swap Directions* fa scorrere in orizzontale le slice verticali e viceversa.
 - *Envelope*: forma della sfumatura (dalla testa alla coda); "Gradient" è una sfumatura lineare.
+- *Source*: il video oppure un colore pieno (*Solid Color*, con Red / Green / Blue). *Show Original*: disegna i wipe sopra quello che arriva invece che su sfondo trasparente.
 
 **STLT-OUTLINER**: contorni disegnati dentro ogni slice, così non sbordano nelle vicine.
 - *View*: su quali slice. *Red / Green / Blue*: colore. *Width*: spessore in pixel. *Feather*: sfumatura verso l'interno (cornice / vignetta).
@@ -58,7 +63,9 @@ Usano lo stesso documento dell'editor, ma ognuno funziona da solo.
 In Resolume gli effetti sono in catena: ognuno lavora su ciò che gli passa quello sopra.
 - **STLT-CHASER → STLT-OUTLINER**: chase con contorni sopra; con *Lit Slices Only* solo sulle slice accese.
 - **STLT-OUTLINER (Show Original spento) → STLT-CHASER**: i contorni fanno il chase.
-- **STLT-CHASER → STLT-WIPER**: si vede solo dove le due sequenze accendono le stesse slice, cioè quasi mai. Per vederli insieme mettili su due layer con la stessa clip, il secondo in blend *Add*.
+- **STLT-CHASER → STLT-WIPER** (Source *Solid Color*, *Show Original* acceso): wipe colorati sopra il chase.
+- **Chase, wipe e contorni su tutta la composizione**: un solo STLT-CHASER sulla Composition con i moduli **Wiper** e **Outliner** accesi. Sotto puoi cambiare layer e clip liberamente.
+- *Scaling*: **Fill** o **Stretch** per clip a schermo intero; **Mask** per contenuti già distribuiti sul palco (uscita di un altro effetto STLT, layer mappati, la composizione).
 
 Le modifiche fatte nell'editor arrivano in Arena entro mezzo secondo, anche con l'effetto già in uso.
 

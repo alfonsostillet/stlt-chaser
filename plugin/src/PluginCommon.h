@@ -111,6 +111,82 @@ inline Vec2 ContentUV( const ChaseDocument& doc, const Slice& slice, Vec2 p, int
 	return { 0.5f + ( local.x - 0.5f ) * cropX, 1.f - ( 0.5f + ( local.y - 0.5f ) * cropY ) };
 }
 
+// ---- Wipes (STLT-WIPER and the Wiper module of STLT-CHASER) ----
+
+const int MAX_WIPE_LOOPS = 16;
+
+// A wipe running through the slices of one step at this moment.
+struct ActiveWipe
+{
+	int stepIndex;
+	float head;// Leading edge position along the slice, 0..1 + length.
+	bool odd;  // Odd step with Odd/Even on: runs the other way.
+};
+
+// Step (0..1) runs through the sequence `loops` times. Each step starts a wipe; with overlap a wipe
+// lasts longer than one step, so the next one starts before it ends. Wraps around the end of the
+// timeline so a looped Step plays seamlessly.
+inline std::vector< ActiveWipe > ActiveWipes( int count, float step, int loops, float length, float overlap, bool oddEven )
+{
+	std::vector< ActiveWipe > wipes;
+	if( count <= 0 )
+		return wipes;
+	loops                = std::clamp( loops, 1, MAX_WIPE_LOOPS );
+	const int total      = count * loops;
+	const float duration = 1.f / ( 1.f - std::clamp( overlap, 0.f, 0.95f ) );
+	const float position = std::min( step, 0.99999f ) * (float)total;
+	for( int j = (int)std::floor( position - duration ); j <= (int)std::floor( position ); ++j )
+	{
+		float t = ( position - (float)j ) / duration;
+		if( t < 0.f || t >= 1.f )
+			continue;
+		const int stepIndex = ( ( j % total ) + total ) % total % count;
+		wipes.push_back( { stepIndex, t * ( 1.f + length ), oddEven && stepIndex % 2 == 1 } );
+	}
+	return wipes;
+}
+
+// Automatic direction: vertical slices wipe bottom to top, horizontal ones away from the centre
+// of the stage. Swap treats vertical slices as horizontal and the other way round.
+struct WipeDirection
+{
+	bool alongY;  // Along the slice's own y edge rather than its x edge.
+	bool reversed;// From the far edge back (local y runs down the slice).
+};
+
+inline WipeDirection BaseWipeDirection( const ChaseDocument& doc, const Slice& slice, bool swap )
+{
+	const Vec2 size = SliceSize( doc, slice );
+	bool vertical   = size.y > size.x;
+	if( swap )
+		vertical = !vertical;
+	return { vertical, vertical ? true : SliceCentre( slice ).x < 0.5f };
+}
+
+// GLSL: opacity of a wipe band at slice-local position `local` (0 = nothing).
+inline const char* WipeAlphaGLSL()
+{
+	return R"(
+uniform float wipeHead;
+uniform float wipeLength;
+uniform int wipeAlongY;
+uniform int wipeReversed;
+uniform int wipeUseCurve;
+uniform float wipeCurve[ 256 ];
+float wipeAlpha( vec2 local )
+{
+	float d = wipeAlongY != 0 ? local.y : local.x;
+	if( wipeReversed != 0 )
+		d = 1.0 - d;
+	// 0 at the leading edge, 1 at the tail of the band.
+	float x = ( wipeHead - d ) / wipeLength;
+	if( x < 0.0 || x > 1.0 )
+		return 0.0;
+	return wipeUseCurve != 0 ? wipeCurve[ int( x * 255.0 ) ] : 1.0 - x;
+}
+)";
+}
+
 // Clip-space vertex shader shared by the slice renderers: composition positions in, y flipped.
 inline const char* CompositionVertexHeader()
 {
