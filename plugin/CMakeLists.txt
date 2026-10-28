@@ -53,6 +53,9 @@ elseif(APPLE)
     target_link_libraries(stilletchaser-common PUBLIC "-framework OpenGL" "-framework AppKit")
 endif()
 
+# plugMain is the only function a host calls, and nothing in the plugins references it, so the linker
+# would drop FFGL.cpp from stilletchaser-common. Windows keeps it through FFGLPlugins.def; elsewhere
+# the symbols are marked undefined so the linker pulls them in and the plugin exports them.
 function(add_stilletchaser_plugin name)
     if(WIN32)
         add_library(${name} SHARED ${ARGN} "${FFGL_ROOT}/build/windows/FFGLPlugins.def")
@@ -66,8 +69,10 @@ function(add_stilletchaser_plugin name)
             MACOSX_BUNDLE_BUNDLE_VERSION ${PROJECT_VERSION}
             MACOSX_BUNDLE_SHORT_VERSION_STRING ${PROJECT_VERSION}
         )
+        target_link_options(${name} PRIVATE "LINKER:-u,_plugMain" "LINKER:-u,_SetLogCallback")
     else()
         add_library(${name} MODULE ${ARGN})
+        target_link_options(${name} PRIVATE "LINKER:-u,plugMain" "LINKER:-u,SetLogCallback")
     endif()
     target_link_libraries(${name} PRIVATE stilletchaser-common)
 endfunction()
