@@ -35,6 +35,29 @@ jobs:
           cmake --build plugin/build --config Release
           cmake --install plugin/build --prefix plugin/dist --config Release
 
+      # A host finds a plugin through plugMain alone; a bundle without it does not load.
+      - name: Check the plugin bundles export plugMain
+        if: runner.os == 'macOS'
+        run: |
+          shopt -s nullglob
+          bundles=(plugin/dist/*.bundle)
+          if [ ${#bundles[@]} -eq 0 ]; then echo "::error::No plugin bundles in plugin/dist"; exit 1; fi
+          status=0
+          for bundle in "${bundles[@]}"; do
+            binary="$bundle/Contents/MacOS/$(basename "$bundle" .bundle)"
+            for arch in $(lipo -archs "$binary"); do
+              for symbol in _plugMain _SetLogCallback; do
+                if nm -gU -arch "$arch" "$binary" | grep -q " $symbol\$"; then
+                  echo "$bundle ($arch) exports $symbol"
+                else
+                  echo "::error::$bundle ($arch) does not export $symbol"
+                  status=1
+                fi
+              done
+            done
+          done
+          exit $status
+
       - name: Test the document loader
         shell: bash
         run: |
