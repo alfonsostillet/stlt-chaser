@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { parseAdvancedOutput } from '../src/advancedOutput.mjs';
 import * as D from '../src/document.mjs';
-import { generate, autoGrid } from '../src/factory.mjs';
+import { generate, firstSteps, maxBlock } from '../src/factory.mjs';
 import { evaluate, sampleLut, createEnvelopeLibrary, removeEnvelope } from '../src/envelopes.mjs';
 
 const SAMPLE = `<?xml version="1.0" encoding="utf-8"?>
@@ -114,37 +114,58 @@ function gridSlices() {
   return slices;
 }
 
-test('factory grid and directions', () => {
-  const slices = gridSlices();
-  const grid = autoGrid(slices, 30, 20);
-  assert.equal(grid.xs.length, 2);
-  assert.equal(grid.ys.length, 1);
-  const base = { direction: 'Horizontal', block: 1, modulo: 0 };
-  assert.deepEqual(generate(slices, base, 30, 20).steps.map((s) => s[0]), ['00', '10', '20', '01', '11', '21']);
-  assert.deepEqual(generate(slices, { ...base, direction: 'Vertical' }, 30, 20).steps.map((s) => s[0]), ['00', '01', '10', '11', '20', '21']);
-  assert.deepEqual(generate(slices, { ...base, direction: 'Column', flipX: true }, 30, 20).steps.map((s) => s.sort()), [['20', '21'], ['10', '11'], ['00', '01']]);
-  assert.equal(generate(slices, { ...base, direction: 'Row' }, 30, 20).steps.length, 2);
+const sorted = (steps) => steps.map((s) => [...s].sort());
+
+test('factory patterns order the slices by where they are', () => {
+  const slices = gridSlices(); // 3 columns x 2 rows, ids "<col><row>"
+  assert.deepEqual(sorted(generate(slices, { pattern: 'left-right' }).steps), [['00', '01'], ['10', '11'], ['20', '21']]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'right-left' }).steps), [['20', '21'], ['10', '11'], ['00', '01']]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'top-bottom' }).steps), [['00', '10', '20'], ['01', '11', '21']]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'bottom-top' }).steps), [['01', '11', '21'], ['00', '10', '20']]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'sides-center' }).steps), [['00', '01', '20', '21'], ['10', '11']]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'diagonal' }).steps), [['00'], ['01', '10'], ['11', '20'], ['21']]);
 });
 
-test('factory grid treats roughly aligned slices as one row and column', () => {
+test('factory centre out, clockwise and random', () => {
+  const square = (id, x, y) => ({ id, points: [[x, y], [x + 10, y], [x + 10, y + 10], [x, y + 10]] });
+  // A plus sign: the middle, then four arms.
+  const plus = [square('m', 20, 20), square('n', 20, 0), square('e', 40, 20), square('s', 20, 40), square('w', 0, 20)];
+  assert.deepEqual(sorted(generate(plus, { pattern: 'center-out' }).steps), [['m'], ['e', 'n', 's', 'w']]);
+  assert.deepEqual(sorted(generate(plus, { pattern: 'out-center' }).steps), [['e', 'n', 's', 'w'], ['m']]);
+  // Clockwise from twelve o'clock (the middle has no angle of its own and comes first).
+  const arms = generate(plus.slice(1), { pattern: 'clockwise' }).steps.flat();
+  assert.deepEqual(arms, ['n', 'e', 's', 'w']);
+  const random = generate(plus, { pattern: 'random' }).steps;
+  assert.equal(random.length, 5);
+  assert.deepEqual(random.flat().sort(), ['e', 'm', 'n', 's', 'w']);
+  assert.deepEqual(generate(plus, { pattern: 'random' }).steps, random, 'the same settings give the same sequence');
+  assert.equal(generate(plus, { pattern: 'random', steps: 2 }).steps.length, 2);
+});
+
+test('factory roughly aligned slices light together', () => {
   const square = (id, x, y) => ({ id, points: [[x, y], [x + 100, y], [x + 100, y + 100], [x, y + 100]] });
   const slices = [square('a', 0, 0), square('b', 150, 4), square('c', 12, 160), square('d', 145, 150)];
-  const grid = autoGrid(slices, 400, 400);
-  assert.equal(grid.xs.length, 1);
-  assert.equal(grid.ys.length, 1);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'left-right' }).steps), [['a', 'c'], ['b', 'd']]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'top-bottom' }).steps), [['a', 'b'], ['c', 'd']]);
 });
 
-test('factory block, modulo, mirror and random', () => {
+test('factory steps, fill, order, block, modulo and moves', () => {
   const slices = gridSlices();
-  const base = { direction: 'Horizontal', block: 1, modulo: 0 };
-  assert.equal(generate(slices, { ...base, block: 2 }, 30, 20).steps.length, 3);
-  const odd = generate(slices, { ...base, modulo: 2 }, 30, 20).steps;
-  // Every other cell in reading order: a checkerboard on a 3-wide grid.
-  assert.deepEqual(odd.map((s) => s.sort()), [['00', '11', '20'], ['01', '10', '21']]);
-  const mirrored = generate(slices, { ...base, direction: 'Column', mirrorX: true }, 30, 20).steps;
-  assert.deepEqual(mirrored[0].sort(), ['00', '01', '20', '21']);
-  const random = generate(slices, { ...base, direction: 'Random' }, 30, 20).steps.map((s) => s[0]);
-  assert.equal(new Set(random).size, 6);
+  // A fixed number of steps splits the pattern in equal stretches.
+  assert.deepEqual(sorted(generate(slices, { pattern: 'left-right', steps: 2 }).steps), [['00', '01'], ['10', '11', '20', '21']]);
+  assert.equal(generate(slices, { pattern: 'left-right', steps: 6 }).steps.length, 6);
+  const build = generate(slices, { pattern: 'left-right', fill: 'build' }).steps;
+  assert.deepEqual(build.map((s) => s.length), [2, 4, 6]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'left-right', alternate: 'odd-even' }).steps), [['00', '01'], ['20', '21'], ['10', '11']]);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'left-right', alternate: 'there-back' }).steps), [['00', '01'], ['10', '11'], ['20', '21'], ['10', '11']]);
+  assert.equal(generate(slices, { pattern: 'left-right', block: 2 }).steps.length, 2);
+  assert.deepEqual(sorted(generate(slices, { pattern: 'left-right', modulo: 2 }).steps), [['00', '01', '20', '21'], ['10', '11']]);
+  assert.equal(maxBlock(slices, { pattern: 'left-right' }), 3);
+  // A slice moved by hand lights from its new step only.
+  const moved = generate(slices, { pattern: 'left-right', moves: { 20: 0, gone: 1 } }).steps;
+  assert.deepEqual(sorted(moved), [['00', '01', '20'], ['10', '11'], ['21']]);
+  assert.deepEqual(firstSteps(moved).get('20'), 0);
+  assert.deepEqual(generate([], { pattern: 'left-right' }).steps, [[]]);
 });
 
 test('envelope curve evaluation and LUT', () => {
