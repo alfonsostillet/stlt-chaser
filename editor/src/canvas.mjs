@@ -38,7 +38,18 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
 
   function visibleSlices() {
     const v = store.currentView;
-    return doc().slices.filter((s) => isVisibleInView(v, s.id));
+    // Big slices first, so smaller ones are drawn over them (a slice of the whole picture, such as a stream's,
+    // would otherwise hide the slices under it).
+    return doc()
+      .slices.filter((s) => isVisibleInView(v, s.id))
+      .map((s) => ({ s, area: sliceArea(s) }))
+      .sort((a, b) => b.area - a.area)
+      .map(({ s }) => s);
+  }
+
+  function sliceArea(slice) {
+    const b = bounds(slice.points);
+    return (b.maxX - b.minX) * (b.maxY - b.minY);
   }
 
   function displayedStep() {
@@ -53,9 +64,19 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
   function sliceAt(x, y) {
     const [wx, wy] = toWorld(x, y);
     const slices = visibleSlices();
-    // Later slices are drawn on top, so test them first.
-    for (let i = slices.length - 1; i >= 0; i -= 1) if (pointInPolygon(wx, wy, slices[i].points)) return slices[i];
-    return null;
+    // The smallest slice under the mouse: it is the one drawn on top, and a big one around it stays reachable
+    // by its own free part.
+    let best = null;
+    let bestArea = Infinity;
+    for (const slice of slices) {
+      if (!pointInPolygon(wx, wy, slice.points)) continue;
+      const area = sliceArea(slice);
+      if (area < bestArea) {
+        best = slice;
+        bestArea = area;
+      }
+    }
+    return best;
   }
 
   function fit() {
