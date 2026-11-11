@@ -56,9 +56,9 @@ Effects in Resolume work in a chain: each one only sees what the one above lets 
 - **Canvas**: your slices as in Resolume. Click to toggle a slice in the current step, drag across slices to flip them, box-select (Shift: on, Ctrl: off, Alt: hide in view), zoom with the wheel, pan with Space.
 - **Sequencer**: 1 to 1024 steps per sequence, unlimited sequences. Drag a step onto another to copy it; drag and hold to copy it to every n-th step. Repeat, ping-pong and clear buttons, preview playback with BPM.
 - **Views**: named groups of slices, used by the effects to limit which slices they touch.
-- **Factory**: generates sequences from a grid laid over the slice centres (horizontal, vertical, row, column, random; flip, block, modulo, mirror, shuffle). Drag the grid lines to adjust it.
+- **Factory**: makes a sequence from where the slices are. Pick a pattern (left → right, right → left, top → bottom, bottom → top, center → out, out → center, sides → center, diagonal, clockwise, random): slices in line light together, and the number on each slice is the step it lights in. Set the steps (Auto or a number), one step at a time or building up, straight, odd / even or there and back; Block, Modulo and Shuffle are under Advanced. Click a slice to move it to the selected step. **Create standard sequences…** makes one sequence per pattern at once.
 
-  ![The Factory panel: a column sweep generated from the grid drawn over the slice centres](docs/images/factory.png)
+  ![The Factory panel: a center-out sequence, with the step number on each slice](docs/images/factory.png)
 
 - **Envelopes**: draw opacity curves with Bézier handles, shared by all projects.
 - **Export**: input and output maps as PNG test patterns, with names, positions and sizes.

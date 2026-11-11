@@ -4,7 +4,7 @@ import { parseAdvancedOutput } from './advancedOutput.mjs';
 import { isStltVjStage, parseStltVjStage } from './stltvjStage.mjs';
 import { useHost } from './theme.mjs';
 import * as D from './document.mjs';
-import { autoGrid, defaultFactorySettings, generate } from './factory.mjs';
+import { PATTERNS, defaultFactorySettings, generate, isPatternFactory, patternName } from './factory.mjs';
 import { createEnvelopeLibrary } from './envelopes.mjs';
 import { createStore } from './store.mjs';
 import { createCanvas } from './canvas.mjs';
@@ -86,13 +86,38 @@ async function boot() {
   };
 
   function applyFactory(settings, coalesce = null) {
-    const { compWidth, compHeight } = store.state.doc.source;
-    const result = generate(factorySlices(), settings, compWidth, compHeight);
+    const { steps } = generate(factorySlices(), settings);
     const index = store.state.ui.sequenceIndex;
     store.edit((d) => {
-      d.sequences[index].steps = result.steps.length ? result.steps : [[]];
-      d.sequences[index].factory = { ...settings, grid: result.grid };
+      d.sequences[index].steps = steps;
+      d.sequences[index].factory = { ...settings };
     }, { coalesce });
+  }
+
+  // Puts a slice in the selected step of a Factory sequence: it lights from there on.
+  function factoryMove(sliceId) {
+    const factory = store.currentSequence.factory;
+    if (!isPatternFactory(factory)) return false;
+    applyFactory({ ...factory, moves: { ...factory.moves, [sliceId]: store.state.ui.stepIndex } });
+    return true;
+  }
+
+  // One new Factory sequence per pattern, after the selected one; selects the first.
+  function createStandardSequences(patternIds, steps) {
+    const slices = factorySlices();
+    if (!slices.length || !patternIds.length) return;
+    const at = store.state.ui.sequenceIndex + 1;
+    store.edit((d) => {
+      const made = patternIds.map((pattern) => {
+        const settings = { ...defaultFactorySettings(), pattern, steps };
+        const sequence = D.createSequence(D.uniqueName(d.sequences, patternName(pattern)));
+        sequence.steps = generate(slices, settings).steps;
+        sequence.factory = settings;
+        return sequence;
+      });
+      d.sequences.splice(at, 0, ...made);
+    });
+    store.setUi({ sequenceIndex: at, stepIndex: 0 });
   }
 
   async function watchSource() {
@@ -105,6 +130,8 @@ async function boot() {
   const actions = {
     factorySlices,
     applyFactory,
+    createStandardSequences,
+    patterns: PATTERNS,
     async newFromXml(xmlPath) {
       const file = xmlPath ?? paths.stltvj ?? (await host.openDialog({ title: 'Advanced Output XML', filters: [{ name: 'Advanced Output', extensions: ['xml'] }] }));
       if (!file) return;
@@ -182,7 +209,7 @@ async function boot() {
   // ---- Components ----
 
   const canvas = createCanvas($('#canvas'), store, {
-    onFactoryGridChange: (grid, key) => applyFactory({ ...(store.currentSequence.factory ?? defaultFactorySettings()), grid }, key),
+    onFactoryPick: factoryMove,
   });
   const sequencer = createSequencer($('#sequencer'), store);
   const panels = createPanels($('#panel'), store, actions);
@@ -227,7 +254,6 @@ async function boot() {
     store.setUi({
       panel: next,
       mode: next === 'envelopes' || next === 'export' ? next : 'canvas',
-      factoryGrid: next === 'factory' ? autoGrid(factorySlices(), store.state.doc.source.compWidth, store.state.doc.source.compHeight) : null,
     });
     // Opening or closing a panel changes the stage width.
     requestAnimationFrame(() => canvas.fit());
@@ -239,7 +265,7 @@ async function boot() {
     if (event.ctrlKey && key === 'z' && !event.shiftKey) store.undo();
     else if (event.ctrlKey && (key === 'y' || (key === 'z' && event.shiftKey))) store.redo();
     else if (store.state.ui.mode === 'canvas' && !event.ctrlKey && key === 'i') invertStep();
-    else if (store.state.ui.mode === 'canvas' && store.state.ui.panel !== 'factory' && key === 'delete') clearStep();
+    else if (store.state.ui.mode === 'canvas' && key === 'delete') clearStep();
     else return;
     event.preventDefault();
   });

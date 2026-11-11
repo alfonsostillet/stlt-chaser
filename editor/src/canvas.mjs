@@ -1,7 +1,8 @@
-// The stage canvas: draws the slices, toggles them in the selected step, pans, zooms
-// and, with the Factory open, edits the factory grid.
+// The stage canvas: draws the slices, toggles them in the selected step, pans and zooms.
+// With the Factory open it shows the step each slice lights in, and a click moves a slice there.
 import { bounds, boxesOverlap, centroid, pointInPolygon } from './geometry.mjs';
 import { isVisibleInView, setVisibleInView, toggleSliceInStep, setSliceInStep } from './document.mjs';
+import { firstSteps, isPatternFactory } from './factory.mjs';
 
 import { THEME } from './theme.mjs';
 
@@ -15,30 +16,25 @@ const colors = () => ({
   labelOn: THEME.onAccent,
   band: THEME.accentWash,
   bandLine: THEME.accent,
-  grid: 'rgba(232, 232, 232, 0.45)',
-  gridActive: THEME.accent,
-  centre: THEME.text,
+  badge: 'rgba(0, 0, 0, 0.72)',
+  badgeText: '#ffffff',
 });
 const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 20;
-const GRID_HIT_PX = 6;
 
-export function createCanvas(canvas, store, { onFactoryGridChange }) {
+export function createCanvas(canvas, store, { onFactoryPick }) {
   const COLORS = colors();
   const ctx = canvas.getContext('2d');
   const view = { zoom: 1, panX: 0, panY: 0, fitted: false };
   let hoverId = null;
-  let hoverLine = null;
   let drag = null;
   let spaceDown = false;
-  let pointer = { x: 0, y: 0 };
   let frameRequested = false;
 
   const doc = () => store.state.doc;
   const ui = () => store.state.ui;
-  // With the Factory panel open the grid is the sequence's own, or a preview grid until the first change.
-  const factoryGrid = () => (ui().panel === 'factory' ? store.currentSequence.factory?.grid ?? ui().factoryGrid : null);
-  const factoryOpen = () => Boolean(factoryGrid());
+  // The Factory panel is open on a sequence it made: numbers on the slices, clicks move them.
+  const factoryOpen = () => ui().panel === 'factory' && isPatternFactory(store.currentSequence.factory);
 
   function visibleSlices() {
     const v = store.currentView;
@@ -59,14 +55,6 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
     const slices = visibleSlices();
     // Later slices are drawn on top, so test them first.
     for (let i = slices.length - 1; i >= 0; i -= 1) if (pointInPolygon(wx, wy, slices[i].points)) return slices[i];
-    return null;
-  }
-
-  function gridLineAt(x, y) {
-    const grid = factoryGrid();
-    if (!grid) return null;
-    for (let i = 0; i < grid.xs.length; i += 1) if (Math.abs(toScreen(grid.xs[i], 0)[0] - x) < GRID_HIT_PX) return { axis: 'xs', index: i };
-    for (let i = 0; i < grid.ys.length; i += 1) if (Math.abs(toScreen(0, grid.ys[i])[1] - y) < GRID_HIT_PX) return { axis: 'ys', index: i };
     return null;
   }
 
@@ -141,7 +129,7 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
     ctx.restore();
 
     drawLabels(lit);
-    if (factoryOpen()) drawGrid(rect);
+    if (factoryOpen()) drawStepNumbers();
     if (drag?.type === 'band') {
       const x = Math.min(drag.x0, drag.x1);
       const y = Math.min(drag.y0, drag.y1);
@@ -169,38 +157,29 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
     }
   }
 
-  function drawGrid(rect) {
-    const grid = factoryGrid();
-    ctx.lineWidth = 1;
-    for (const [axis, list] of [['xs', grid.xs], ['ys', grid.ys]]) {
-      list.forEach((value, index) => {
-        const active = hoverLine?.axis === axis && hoverLine.index === index;
-        ctx.strokeStyle = active ? COLORS.gridActive : COLORS.grid;
-        ctx.lineWidth = active ? 2 : 1;
-        ctx.beginPath();
-        if (axis === 'xs') {
-          const x = Math.round(toScreen(value, 0)[0]) + 0.5;
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, rect.height);
-        } else {
-          const y = Math.round(toScreen(0, value)[1]) + 0.5;
-          ctx.moveTo(0, y);
-          ctx.lineTo(rect.width, y);
-        }
-        ctx.stroke();
-      });
-    }
-    ctx.fillStyle = COLORS.centre;
+  // The step each slice first lights in, on a dark disc at its centre.
+  function drawStepNumbers() {
+    const first = firstSteps(store.currentSequence.steps);
+    ctx.font = '600 11px Segoe UI, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
     for (const slice of visibleSlices()) {
+      if (!first.has(slice.id)) continue;
+      const text = String(first.get(slice.id) + 1);
       const [x, y] = toScreen(...centroid(slice.points));
-      ctx.fillRect(x - 1.5, y - 1.5, 3, 3);
+      const r = Math.max(9, ctx.measureText(text).width / 2 + 5);
+      ctx.fillStyle = COLORS.badge;
+      ctx.beginPath();
+      ctx.arc(x, y + (slice.name ? 14 : 0), r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = COLORS.badgeText;
+      ctx.fillText(text, x, y + (slice.name ? 14 : 0) + 0.5);
     }
   }
 
   function cursorFor() {
     if (drag?.type === 'pan') return 'grabbing';
     if (spaceDown || ui().tool === 'hand') return 'grab';
-    if (drag?.type === 'grid' || hoverLine) return hoverLine?.axis === 'ys' || drag?.axis === 'ys' ? 'row-resize' : 'col-resize';
     return hoverId ? 'pointer' : 'crosshair';
   }
 
@@ -217,19 +196,11 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
     }
     if (event.button !== 0) return;
 
-    const line = gridLineAt(x, y);
-    if (line) {
-      const grid = structuredClone(factoryGrid());
-      // Alt-drag copies the line instead of moving it.
-      if (event.altKey) {
-        grid[line.axis].push(grid[line.axis][line.index]);
-        line.index = grid[line.axis].length - 1;
-      }
-      drag = { type: 'grid', axis: line.axis, index: line.index, grid, key: `grid-${Date.now()}` };
+    const slice = sliceAt(x, y);
+    if (slice && factoryOpen() && !event.shiftKey && !event.ctrlKey && !event.altKey) {
+      onFactoryPick(slice.id);
       return;
     }
-
-    const slice = sliceAt(x, y);
     if (slice && !event.shiftKey && !event.ctrlKey && !event.altKey) {
       const key = `snake-${Date.now()}`;
       drag = { type: 'snake', visited: new Set([slice.id]), key };
@@ -242,13 +213,10 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
   canvas.addEventListener('pointermove', (event) => {
     const x = event.offsetX;
     const y = event.offsetY;
-    pointer = { x, y };
     if (!drag) {
       const nextHover = sliceAt(x, y)?.id ?? null;
-      const nextLine = gridLineAt(x, y);
-      if (nextHover !== hoverId || JSON.stringify(nextLine) !== JSON.stringify(hoverLine)) {
+      if (nextHover !== hoverId) {
         hoverId = nextHover;
-        hoverLine = nextLine;
         redraw();
       }
       return;
@@ -259,12 +227,6 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
         view.panY = drag.panY + (y - drag.y);
         redraw();
         break;
-      case 'grid': {
-        const [wx, wy] = toWorld(x, y);
-        drag.grid[drag.axis][drag.index] = drag.axis === 'xs' ? wx : wy;
-        onFactoryGridChange(drag.grid, drag.key);
-        break;
-      }
       case 'snake': {
         const slice = sliceAt(x, y);
         if (slice && !drag.visited.has(slice.id)) {
@@ -283,7 +245,7 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
 
   canvas.addEventListener('pointerup', (event) => {
     if (drag?.type === 'band') applyBand(event);
-    if (drag?.type === 'grid' || drag?.type === 'snake') store.endCoalesce();
+    if (drag?.type === 'snake') store.endCoalesce();
     drag = null;
     redraw();
   });
@@ -307,9 +269,8 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
   }
 
   canvas.addEventListener('pointerleave', () => {
-    if (!drag && (hoverId || hoverLine)) {
+    if (!drag && hoverId) {
       hoverId = null;
-      hoverLine = null;
       redraw();
     }
   });
@@ -325,15 +286,6 @@ export function createCanvas(canvas, store, { onFactoryGridChange }) {
       spaceDown = true;
       redraw();
       event.preventDefault();
-    }
-    if ((event.key === 'Delete' || event.key === 'Backspace') && factoryOpen()) {
-      const line = gridLineAt(pointer.x, pointer.y);
-      if (line) {
-        const grid = structuredClone(factoryGrid());
-        grid[line.axis].splice(line.index, 1);
-        hoverLine = null;
-        onFactoryGridChange(grid, null);
-      }
     }
     if (event.ctrlKey && (event.key === '+' || event.key === '=')) zoomAt(1.25, canvas.clientWidth / 2, canvas.clientHeight / 2);
     if (event.ctrlKey && event.key === '-') zoomAt(0.8, canvas.clientWidth / 2, canvas.clientHeight / 2);
