@@ -1,6 +1,6 @@
 // The stage canvas: draws the slices, toggles them in the selected step, pans and zooms.
 // With the Factory open it shows the step each slice lights in, and a click moves a slice there.
-import { bounds, boxesOverlap, centroid, pointInPolygon } from './geometry.mjs';
+import { bounds, boxCoverage, centroid, pointInPolygon } from './geometry.mjs';
 import { isVisibleInView, setVisibleInView, toggleSliceInStep, setSliceInStep } from './document.mjs';
 import { firstSteps, isPatternFactory } from './factory.mjs';
 
@@ -36,20 +36,37 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
   // The Factory panel is open on a sequence it made: numbers on the slices, clicks move them.
   const factoryOpen = () => ui().panel === 'factory' && isPatternFactory(store.currentSequence.factory);
 
+  // Every slice's bounds and area, worked out once per document change (the mouse asks on every move).
+  let measured = null;
+  let shown = null;
+  store.subscribe((what) => {
+    if (what === 'doc' || what === 'all') {
+      measured = null;
+      shown = null;
+    }
+  });
+  function measure(slice) {
+    if (!measured || measured.doc !== doc()) measured = { doc: doc(), map: new Map() };
+    let m = measured.map.get(slice);
+    if (!m) {
+      const b = bounds(slice.points);
+      m = { bounds: b, area: (b.maxX - b.minX) * (b.maxY - b.minY) };
+      measured.map.set(slice, m);
+    }
+    return m;
+  }
+  const sliceArea = (slice) => measure(slice).area;
+
   function visibleSlices() {
     const v = store.currentView;
+    if (shown && shown.doc === doc() && shown.view === v) return shown.list;
     // Big slices first, so smaller ones are drawn over them (a slice of the whole picture, such as a stream's,
     // would otherwise hide the slices under it).
-    return doc()
+    const list = doc()
       .slices.filter((s) => isVisibleInView(v, s.id))
-      .map((s) => ({ s, area: sliceArea(s) }))
-      .sort((a, b) => b.area - a.area)
-      .map(({ s }) => s);
-  }
-
-  function sliceArea(slice) {
-    const b = bounds(slice.points);
-    return (b.maxX - b.minX) * (b.maxY - b.minY);
+      .sort((a, b) => sliceArea(b) - sliceArea(a));
+    shown = { doc: doc(), view: v, list };
+    return list;
   }
 
   function displayedStep() {
@@ -168,12 +185,15 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const slice of visibleSlices()) {
-      const b = bounds(slice.points);
+      const b = measure(slice).bounds;
       const width = (b.maxX - b.minX) * view.zoom;
       const height = (b.maxY - b.minY) * view.zoom;
       if (width < 50 || height < 18 || !slice.name) continue;
-      ctx.fillStyle = lit.has(slice.id) ? COLORS.labelOn : COLORS.label;
+      // Under a smaller slice drawn over it, the name would print over that one's: left out.
       const [cx, cy] = toScreen(...centroid(slice.points));
+      const top = sliceAt(cx, cy);
+      if (top && top !== slice && sliceArea(top) < sliceArea(slice)) continue;
+      ctx.fillStyle = lit.has(slice.id) ? COLORS.labelOn : COLORS.label;
       ctx.fillText(slice.name, cx, cy, width - 6);
     }
   }
@@ -275,7 +295,8 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
     const [ax, ay] = toWorld(Math.min(drag.x0, drag.x1), Math.min(drag.y0, drag.y1));
     const [bx, by] = toWorld(Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1));
     const box = { minX: ax, minY: ay, maxX: bx, maxY: by };
-    const ids = visibleSlices().filter((s) => boxesOverlap(box, bounds(s.points))).map((s) => s.id);
+    // Slices mostly inside the band: a big one around it (the whole picture) is not taken along.
+    const ids = visibleSlices().filter((s) => boxCoverage(box, measure(s).bounds) >= 0.5).map((s) => s.id);
     if (!ids.length) return;
     const { sequenceIndex, stepIndex, viewIndex } = ui();
     store.edit((d) => {

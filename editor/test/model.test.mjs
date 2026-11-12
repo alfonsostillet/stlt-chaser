@@ -5,6 +5,7 @@ import { parseAdvancedOutput } from '../src/advancedOutput.mjs';
 import * as D from '../src/document.mjs';
 import { generate, firstSteps, maxBlock } from '../src/factory.mjs';
 import { evaluate, sampleLut, createEnvelopeLibrary, removeEnvelope } from '../src/envelopes.mjs';
+import { boxCoverage } from '../src/geometry.mjs';
 
 const SAMPLE = `<?xml version="1.0" encoding="utf-8"?>
 <ScreenSetup name="ScreenSetup">
@@ -213,4 +214,12 @@ test('reads the stage STLT writes and relinks a document onto it', async () => {
   doc.sequences[0].steps[0] = [arenaA];
   D.relink(doc, setup, 'chaser-stage.json');
   assert.deepEqual(doc.sequences[0].steps[0], ['a1']);
+});
+
+test('a band takes the slices mostly inside it, not a big one around it', () => {
+  const band = { minX: 0, minY: 0, maxX: 100, maxY: 100 };
+  assert.equal(boxCoverage(band, { minX: 10, minY: 10, maxX: 50, maxY: 50 }), 1);
+  assert.equal(boxCoverage(band, { minX: 50, minY: 0, maxX: 150, maxY: 100 }), 0.5);
+  assert.ok(boxCoverage(band, { minX: 0, minY: 0, maxX: 1920, maxY: 1080 }) < 0.01);
+  assert.equal(boxCoverage(band, { minX: 200, minY: 0, maxX: 300, maxY: 100 }), 0);
 });
