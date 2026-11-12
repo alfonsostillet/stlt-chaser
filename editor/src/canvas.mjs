@@ -3,6 +3,7 @@
 import { bounds, boxCoverage, centroid, pointInPolygon } from './geometry.mjs';
 import { isVisibleInView, setVisibleInView, toggleSliceInStep, setSliceInStep } from './document.mjs';
 import { firstSteps, isPatternFactory } from './factory.mjs';
+import { screenColour, stageLayout } from './layout.mjs';
 
 import { THEME } from './theme.mjs';
 
@@ -17,12 +18,15 @@ const colors = () => ({
   band: THEME.accentWash,
   bandLine: THEME.accent,
   badge: 'rgba(0, 0, 0, 0.72)',
+  frame: THEME.frame ?? 'rgba(255, 255, 255, 0.025)',
+  frameLine: THEME.frameLine ?? 'rgba(255, 255, 255, 0.16)',
+  title: THEME.text,
   badgeText: '#ffffff',
 });
 const MIN_ZOOM = 0.02;
 const MAX_ZOOM = 20;
 
-export function createCanvas(canvas, store, { onFactoryPick }) {
+export function createCanvas(canvas, store, { onFactoryPick, onShowScreen }) {
   const COLORS = colors();
   const ctx = canvas.getContext('2d');
   const view = { zoom: 1, panX: 0, panY: 0, fitted: false };
@@ -36,38 +40,38 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
   // The Factory panel is open on a sequence it made: numbers on the slices, clicks move them.
   const factoryOpen = () => ui().panel === 'factory' && isPatternFactory(store.currentSequence.factory);
 
-  // Every slice's bounds and area, worked out once per document change (the mouse asks on every move).
-  let measured = null;
-  let shown = null;
+  // What is shown and where (stageLayout), and every slice's bounds and area there: worked out again only when
+  // the document, the view or the choice of screens changes (the mouse asks on every move).
+  let cache = null;
+  let lastShown = null; // the last choice of screens and window shape drawn
   store.subscribe((what) => {
-    if (what === 'doc' || what === 'all') {
-      measured = null;
-      shown = null;
-    }
+    if (what === 'doc' || what === 'all') cache = null;
   });
-  function measure(slice) {
-    if (!measured || measured.doc !== doc()) measured = { doc: doc(), map: new Map() };
-    let m = measured.map.get(slice);
-    if (!m) {
-      const b = bounds(slice.points);
-      m = { bounds: b, area: (b.maxX - b.minX) * (b.maxY - b.minY) };
-      measured.map.set(slice, m);
-    }
-    return m;
-  }
-  const sliceArea = (slice) => measure(slice).area;
-
-  function visibleSlices() {
+  function shownLayout() {
     const v = store.currentView;
-    if (shown && shown.doc === doc() && shown.view === v) return shown.list;
+    // The window's shape, roughly (the rows of screens follow it, not every pixel of a resize).
+    const rect = canvas.getBoundingClientRect();
+    const aspect = rect.width > 0 && rect.height > 0 ? Math.round((rect.width / rect.height) * 4) / 4 : 16 / 9;
+    if (cache && cache.doc === doc() && cache.view === v && cache.show === doc().show && cache.aspect === aspect) return cache;
+    const layout = stageLayout(doc(), doc().show, aspect);
     // Big slices first, so smaller ones are drawn over them (a slice of the whole picture, such as a stream's,
     // would otherwise hide the slices under it).
-    const list = doc()
-      .slices.filter((s) => isVisibleInView(v, s.id))
-      .sort((a, b) => sliceArea(b) - sliceArea(a));
-    shown = { doc: doc(), view: v, list };
-    return list;
+    const items = layout.items
+      .filter((item) => isVisibleInView(v, item.slice.id))
+      .map((item) => {
+        const b = bounds(item.points);
+        return { ...item, bounds: b, area: (b.maxX - b.minX) * (b.maxY - b.minY), centre: centroid(item.points) };
+      })
+      .sort((a, b) => b.area - a.area);
+    // Another choice of screens (from the picker, or undone), or rows rearranged for the window: fitted again.
+    const shownNow = `${layout.show}|${layout.frames.length ? aspect : ''}`;
+    if (lastShown !== null && lastShown !== shownNow) view.fitted = false;
+    lastShown = shownNow;
+    cache = { doc: doc(), view: v, show: doc().show, aspect, frames: layout.frames, items, mode: layout.show };
+    return cache;
   }
+  const visibleItems = () => shownLayout().items;
+  const frames = () => shownLayout().frames;
 
   function displayedStep() {
     const sequence = store.currentSequence;
@@ -78,34 +82,46 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
   const toWorld = (x, y) => [(x - view.panX) / view.zoom, (y - view.panY) / view.zoom];
   const toScreen = (x, y) => [x * view.zoom + view.panX, y * view.zoom + view.panY];
 
-  function sliceAt(x, y) {
+  function itemAt(x, y) {
     const [wx, wy] = toWorld(x, y);
-    const slices = visibleSlices();
     // The smallest slice under the mouse: it is the one drawn on top, and a big one around it stays reachable
     // by its own free part.
     let best = null;
-    let bestArea = Infinity;
-    for (const slice of slices) {
-      if (!pointInPolygon(wx, wy, slice.points)) continue;
-      const area = sliceArea(slice);
-      if (area < bestArea) {
-        best = slice;
-        bestArea = area;
-      }
+    for (const item of visibleItems()) {
+      const b = item.bounds;
+      if (wx < b.minX || wx > b.maxX || wy < b.minY || wy > b.maxY || !pointInPolygon(wx, wy, item.points)) continue;
+      if (!best || item.area < best.area) best = item;
     }
     return best;
   }
+  const sliceAt = (x, y) => itemAt(x, y)?.slice ?? null;
+
+  // The frame whose title row (above it) is at a point of the canvas, or -1.
+  function titleAt(x, y) {
+    return frames().findIndex((f) => {
+      const [x0, y0] = toScreen(f.x, f.y);
+      const [x1] = toScreen(f.x + f.width, f.y);
+      return x >= x0 && x <= x1 && y >= y0 - 24 && y < y0;
+    });
+  }
+  function frameAt(x, y) {
+    const [wx, wy] = toWorld(x, y);
+    return frames().findIndex((f) => wx >= f.x && wx <= f.x + f.width && wy >= f.y && wy <= f.y + f.height);
+  }
 
   function fit() {
-    const slices = visibleSlices().length ? visibleSlices() : doc().slices;
+    const items = visibleItems();
     const rect = canvas.getBoundingClientRect();
-    if (!slices.length || rect.width === 0) return;
-    const b = bounds(slices.flatMap((s) => s.points));
+    if ((!items.length && !frames().length) || rect.width === 0) return;
+    const b = bounds([
+      ...items.flatMap((i) => [[i.bounds.minX, i.bounds.minY], [i.bounds.maxX, i.bounds.maxY]]),
+      ...frames().flatMap((f) => [[f.x, f.y], [f.x + f.width, f.y + f.height]]),
+    ]);
     const margin = 40;
     const zoom = Math.min((rect.width - margin * 2) / (b.maxX - b.minX || 1), (rect.height - margin * 2) / (b.maxY - b.minY || 1));
     view.zoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, zoom));
     view.panX = rect.width / 2 - ((b.minX + b.maxX) / 2) * view.zoom;
-    view.panY = rect.height / 2 - ((b.minY + b.maxY) / 2) * view.zoom;
+    view.panY = rect.height / 2 - ((b.minY + b.maxY) / 2) * view.zoom + (frames().length ? 10 : 0); // room for the titles
     view.fitted = true;
     redraw();
     store.setUi({});
@@ -139,6 +155,7 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
       canvas.width = Math.round(rect.width * dpr);
       canvas.height = Math.round(rect.height * dpr);
     }
+    shownLayout(); // first: another choice of screens asks for a new fit
     if (!view.fitted && rect.width > 0) {
       fit();
       return;
@@ -150,10 +167,18 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
     ctx.save();
     ctx.translate(view.panX, view.panY);
     ctx.scale(view.zoom, view.zoom);
-    for (const slice of visibleSlices()) {
+    // The screens: a dark frame each (their titles are drawn over, at a size that does not change with the zoom).
+    for (const f of frames()) {
+      ctx.fillStyle = COLORS.frame;
+      ctx.fillRect(f.x, f.y, f.width, f.height);
+      ctx.lineWidth = 1 / view.zoom;
+      ctx.strokeStyle = COLORS.frameLine;
+      ctx.strokeRect(f.x, f.y, f.width, f.height);
+    }
+    for (const { slice, points } of visibleItems()) {
       const on = lit.has(slice.id);
       ctx.beginPath();
-      slice.points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+      points.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
       ctx.closePath();
       ctx.fillStyle = on ? COLORS.on : slice.id === hoverId ? COLORS.hover : COLORS.slice;
       ctx.fill();
@@ -166,6 +191,7 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
     ctx.setLineDash([]);
     ctx.restore();
 
+    drawTitles();
     drawLabels(lit);
     if (factoryOpen()) drawStepNumbers();
     if (drag?.type === 'band') {
@@ -180,19 +206,56 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
     canvas.style.cursor = cursorFor();
   }
 
+  // Each screen's number (in its colour), name and size, above its frame.
+  function drawTitles() {
+    ctx.textBaseline = 'middle';
+    for (const f of frames()) {
+      const [x0, y0] = toScreen(f.x, f.y);
+      const [x1] = toScreen(f.x + f.width, f.y);
+      const y = y0 - 12;
+      let x = x0;
+      if (f.index >= 0) {
+        const n = String(f.index + 1);
+        ctx.font = '700 11px Segoe UI, sans-serif';
+        const w = Math.max(18, ctx.measureText(n).width + 8);
+        ctx.fillStyle = screenColour(f.index);
+        ctx.fillRect(x, y - 9, w, 18);
+        ctx.fillStyle = COLORS.labelOn;
+        ctx.textAlign = 'center';
+        ctx.fillText(n, x + w / 2, y + 0.5);
+        x += w + 8;
+      }
+      ctx.textAlign = 'left';
+      ctx.font = '600 12px Segoe UI, sans-serif';
+      ctx.fillStyle = COLORS.title;
+      const size = `${f.width} \u00d7 ${f.height}`;
+      ctx.font = '11px Segoe UI, sans-serif';
+      const sizeWidth = ctx.measureText(size).width;
+      ctx.font = '600 12px Segoe UI, sans-serif';
+      const room = x1 - x - sizeWidth - 12;
+      if (room > 20) ctx.fillText(f.name, x, y, room);
+      if (x1 - x0 > sizeWidth + 60) {
+        ctx.font = '11px Segoe UI, sans-serif';
+        ctx.fillStyle = COLORS.label;
+        ctx.textAlign = 'right';
+        ctx.fillText(size, x1, y);
+      }
+    }
+  }
+
   function drawLabels(lit) {
     ctx.font = '11px Segoe UI, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (const slice of visibleSlices()) {
-      const b = measure(slice).bounds;
+    for (const item of visibleItems()) {
+      const { slice, bounds: b } = item;
       const width = (b.maxX - b.minX) * view.zoom;
       const height = (b.maxY - b.minY) * view.zoom;
       if (width < 50 || height < 18 || !slice.name) continue;
       // Under a smaller slice drawn over it, the name would print over that one's: left out.
-      const [cx, cy] = toScreen(...centroid(slice.points));
-      const top = sliceAt(cx, cy);
-      if (top && top !== slice && sliceArea(top) < sliceArea(slice)) continue;
+      const [cx, cy] = toScreen(...item.centre);
+      const top = itemAt(cx, cy);
+      if (top && top !== item && top.area < item.area) continue;
       ctx.fillStyle = lit.has(slice.id) ? COLORS.labelOn : COLORS.label;
       ctx.fillText(slice.name, cx, cy, width - 6);
     }
@@ -204,10 +267,10 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
     ctx.font = '600 11px Segoe UI, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (const slice of visibleSlices()) {
+    for (const { slice, centre } of visibleItems()) {
       if (!first.has(slice.id)) continue;
       const text = String(first.get(slice.id) + 1);
-      const [x, y] = toScreen(...centroid(slice.points));
+      const [x, y] = toScreen(...centre);
       const r = Math.max(9, ctx.measureText(text).width / 2 + 5);
       ctx.fillStyle = COLORS.badge;
       ctx.beginPath();
@@ -248,7 +311,13 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
       store.edit((d) => toggleSliceInStep(d.sequences[ui().sequenceIndex], ui().stepIndex, slice.id), { coalesce: key });
       return;
     }
-    drag = { type: 'band', x0: x, y0: y, x1: x, y1: y };
+    drag = { type: 'band', x0: x, y0: y, x1: x, y1: y, frame: frameAt(x, y) };
+  });
+
+  // A double-click on a screen's title shows that screen alone.
+  canvas.addEventListener('dblclick', (event) => {
+    const f = titleAt(event.offsetX, event.offsetY);
+    if (f >= 0 && frames()[f].index >= 0) onShowScreen?.(doc().screens[frames()[f].index].id);
   });
 
   canvas.addEventListener('pointermove', (event) => {
@@ -296,7 +365,10 @@ export function createCanvas(canvas, store, { onFactoryPick }) {
     const [bx, by] = toWorld(Math.max(drag.x0, drag.x1), Math.max(drag.y0, drag.y1));
     const box = { minX: ax, minY: ay, maxX: bx, maxY: by };
     // Slices mostly inside the band: a big one around it (the whole picture) is not taken along.
-    const ids = visibleSlices().filter((s) => boxCoverage(box, measure(s).bounds) >= 0.5).map((s) => s.id);
+    // Started inside a screen: only that screen's slices.
+    const ids = visibleItems()
+      .filter((item) => (drag.frame < 0 || item.frame === drag.frame) && boxCoverage(box, item.bounds) >= 0.5)
+      .map((item) => item.slice.id);
     if (!ids.length) return;
     const { sequenceIndex, stepIndex, viewIndex } = ui();
     store.edit((d) => {

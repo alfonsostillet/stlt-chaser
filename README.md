@@ -54,6 +54,7 @@ Effects in Resolume work in a chain: each one only sees what the one above lets 
 ## The editor
 
 - **Canvas**: your slices as in Resolume. Click to toggle a slice in the current step, drag across slices to flip them, box-select (Shift: on, Ctrl: off, Alt: hide in view), zoom with the wheel, pan with Space.
+- **Screens** (the picker after the zoom): every screen side by side with its slices where they go on it, one screen at a time (Page Up / Page Down, or double-click a screen's title), or the composition, where the slices take their picture from. A box started inside a screen only takes that screen's slices, and only the slices mostly inside the box.
 - **Sequencer**: 1 to 1024 steps per sequence, unlimited sequences. Drag a step onto another to copy it; drag and hold to copy it to every n-th step. Repeat, ping-pong and clear buttons, preview playback with BPM.
 - **Views**: named groups of slices, used by the effects to limit which slices they touch.
 - **Factory**: makes a sequence from where the slices are. Pick a pattern (left → right, right → left, top → bottom, bottom → top, center → out, out → center, sides → center, diagonal, clockwise, random): slices in line light together, and the number on each slice is the step it lights in. Set the steps (Auto or a number), one step at a time or building up, straight, odd / even or there and back; Block, Modulo and Shuffle are under Advanced. Click a slice to move it to the selected step. **Create standard sequences…** makes one sequence per pattern at once.

@@ -6,6 +6,7 @@ import * as D from '../src/document.mjs';
 import { generate, firstSteps, maxBlock } from '../src/factory.mjs';
 import { evaluate, sampleLut, createEnvelopeLibrary, removeEnvelope } from '../src/envelopes.mjs';
 import { boxCoverage } from '../src/geometry.mjs';
+import { stageLayout, resolveShow } from '../src/layout.mjs';
 
 const SAMPLE = `<?xml version="1.0" encoding="utf-8"?>
 <ScreenSetup name="ScreenSetup">
@@ -222,4 +223,39 @@ test('a band takes the slices mostly inside it, not a big one around it', () => 
   assert.equal(boxCoverage(band, { minX: 50, minY: 0, maxX: 150, maxY: 100 }), 0.5);
   assert.ok(boxCoverage(band, { minX: 0, minY: 0, maxX: 1920, maxY: 1080 }) < 0.01);
   assert.equal(boxCoverage(band, { minX: 200, minY: 0, maxX: 300, maxY: 100 }), 0);
+});
+
+test('the stage shows every screen side by side, one screen, or the composition', () => {
+  const sq = (x, y, w, h) => [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+  const doc = {
+    screens: [{ id: 'a', name: 'LED', width: 2048, height: 768 }, { id: 'b', name: 'Stream', width: 1920, height: 1080 }],
+    slices: [
+      { id: '1', name: 'Main 1', screen: 'a', points: sq(0, 0, 100, 100), outPoints: sq(256, 0, 256, 256) },
+      { id: '2', name: 'Everything', screen: 'b', points: sq(0, 0, 1920, 1080), outPoints: sq(0, 0, 1920, 1080) },
+      { id: '3', name: 'Lost', screen: 'z', points: sq(10, 10, 50, 50), outPoints: [] },
+    ],
+  };
+  const all = stageLayout(doc);
+  assert.equal(all.show, 'screens');
+  assert.deepEqual(all.frames.map((f) => f.name), ['LED', 'Stream', 'On no screen']);
+  // Frames do not overlap, and a slice sits where it goes on its screen.
+  const [led, stream] = all.frames;
+  assert.ok(stream.x >= led.x + led.width || stream.y >= led.y + led.height);
+  const main = all.items.find((i) => i.slice.id === '1');
+  assert.deepEqual(main.points[0], [led.x + 256, led.y]);
+  const everything = all.items.find((i) => i.slice.id === '2');
+  assert.deepEqual(everything.points[0], [stream.x, stream.y]);
+  assert.equal(all.items.find((i) => i.slice.id === '3').frame, 2);
+
+  const one = stageLayout(doc, 'b');
+  assert.deepEqual(one.items.map((i) => i.slice.id), ['2']);
+  assert.deepEqual(one.frames.map((f) => [f.x, f.y]), [[0, 0]]);
+
+  const composition = stageLayout(doc, 'composition');
+  assert.equal(composition.frames.length, 0);
+  assert.equal(composition.items.length, 3);
+
+  // A screen that is gone, or a document without output points: back to what can be shown.
+  assert.equal(resolveShow(doc, 'gone'), 'screens');
+  assert.equal(resolveShow({ screens: [], slices: doc.slices }, 'a'), 'composition');
 });
