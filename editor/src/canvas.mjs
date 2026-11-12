@@ -44,15 +44,26 @@ export function createCanvas(canvas, store, { onFactoryPick, onShowScreen }) {
   // the document, the view or the choice of screens changes (the mouse asks on every move).
   let cache = null;
   let lastShown = null; // the last choice of screens and window shape drawn
+  // The window's shape, roughly (the rows of screens follow it, not every pixel of a resize): read when the canvas
+  // is resized, not on every question about the slices.
+  let aspect = 16 / 9;
+  function measureAspect() {
+    const rect = canvas.getBoundingClientRect();
+    if (rect.width > 0 && rect.height > 0) aspect = Math.round((rect.width / rect.height) * 4) / 4;
+  }
+  // Edits mostly light slices in steps: the layout is checked again only then, and worked out again only when the
+  // slices, the view's slices or the choice of screens changed.
+  let dirty = true;
   store.subscribe((what) => {
-    if (what === 'doc' || what === 'all') cache = null;
+    if (what === 'doc' || what === 'all') dirty = true;
   });
+  const viewKey = (v) => `${v.id}|${(v.hidden ?? v.visible ?? []).join(',')}`;
   function shownLayout() {
     const v = store.currentView;
-    // The window's shape, roughly (the rows of screens follow it, not every pixel of a resize).
-    const rect = canvas.getBoundingClientRect();
-    const aspect = rect.width > 0 && rect.height > 0 ? Math.round((rect.width / rect.height) * 4) / 4 : 16 / 9;
-    if (cache && cache.doc === doc() && cache.view === v && cache.show === doc().show && cache.aspect === aspect) return cache;
+    if (cache && !dirty && cache.view === v && cache.aspect === aspect) return cache;
+    const key = viewKey(v);
+    dirty = false;
+    if (cache && cache.slices === doc().slices && cache.view === v && cache.viewKey === key && cache.show === doc().show && cache.aspect === aspect) return cache;
     const layout = stageLayout(doc(), doc().show, aspect);
     // Big slices first, so smaller ones are drawn over them (a slice of the whole picture, such as a stream's,
     // would otherwise hide the slices under it).
@@ -63,11 +74,22 @@ export function createCanvas(canvas, store, { onFactoryPick, onShowScreen }) {
         return { ...item, bounds: b, area: (b.maxX - b.minX) * (b.maxY - b.minY), centre: centroid(item.points) };
       })
       .sort((a, b) => b.area - a.area);
+    // A name under a smaller slice drawn over it would print over that one's: left out (worked out here, once).
+    for (const item of items) {
+      const [cx, cy] = item.centre;
+      item.labelHidden = items.some(
+        (other) =>
+          other !== item &&
+          other.area < item.area &&
+          cx >= other.bounds.minX && cx <= other.bounds.maxX && cy >= other.bounds.minY && cy <= other.bounds.maxY &&
+          pointInPolygon(cx, cy, other.points),
+      );
+    }
     // Another choice of screens (from the picker, or undone), or rows rearranged for the window: fitted again.
     const shownNow = `${layout.show}|${layout.frames.length ? aspect : ''}`;
     if (lastShown !== null && lastShown !== shownNow) view.fitted = false;
     lastShown = shownNow;
-    cache = { doc: doc(), view: v, show: doc().show, aspect, frames: layout.frames, items, mode: layout.show };
+    cache = { slices: doc().slices, view: v, viewKey: key, show: doc().show, aspect, frames: layout.frames, items, mode: layout.show };
     return cache;
   }
   const visibleItems = () => shownLayout().items;
@@ -252,10 +274,8 @@ export function createCanvas(canvas, store, { onFactoryPick, onShowScreen }) {
       const width = (b.maxX - b.minX) * view.zoom;
       const height = (b.maxY - b.minY) * view.zoom;
       if (width < 50 || height < 18 || !slice.name) continue;
-      // Under a smaller slice drawn over it, the name would print over that one's: left out.
+      if (item.labelHidden) continue;
       const [cx, cy] = toScreen(...item.centre);
-      const top = itemAt(cx, cy);
-      if (top && top !== item && top.area < item.area) continue;
       ctx.fillStyle = lit.has(slice.id) ? COLORS.labelOn : COLORS.label;
       ctx.fillText(slice.name, cx, cy, width - 6);
     }
@@ -410,7 +430,10 @@ export function createCanvas(canvas, store, { onFactoryPick, onShowScreen }) {
       redraw();
     }
   });
-  new ResizeObserver(redraw).observe(canvas);
+  new ResizeObserver(() => {
+    measureAspect();
+    redraw();
+  }).observe(canvas);
 
   return {
     redraw,
